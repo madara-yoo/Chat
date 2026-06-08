@@ -82,6 +82,7 @@ export default function App() {
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
 
   const messageEndRef = useRef<HTMLDivElement>(null);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
 
   // 1. Initial Load of profile, PWA event handlers, and active service workers
   useEffect(() => {
@@ -171,7 +172,12 @@ export default function App() {
 
   // Scroll to latest updates
   useEffect(() => {
-    messageEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTo({
+        top: chatContainerRef.current.scrollHeight,
+        behavior: "smooth"
+      });
+    }
   }, [messages, isLoading]);
 
   // Save profile state handler
@@ -315,7 +321,7 @@ export default function App() {
   };
 
   return (
-    <div className="relative min-h-screen w-full font-sans overflow-hidden flex flex-col bg-gradient-to-br from-[#120f26] via-[#1d163f] to-[#39123b]" dir="rtl">
+    <div className="relative h-screen min-h-[100dvh] w-full font-sans overflow-hidden flex flex-col bg-gradient-to-br from-[#120f26] via-[#1d163f] to-[#39123b]" dir="rtl">
       
       {/* Dynamic Glassmorphism Background Blurs */}
       <div className="absolute top-[-10%] right-[-10%] w-[500px] h-[500px] rounded-full bg-indigo-500/20 blur-[130px] pointer-events-none" />
@@ -467,7 +473,7 @@ export default function App() {
         </div>
       ) : (
         // MAIN PLATFORM
-        <div className="flex-1 w-full max-w-7xl mx-auto p-3 md:p-6 flex flex-col md:flex-row gap-4 h-[calc(100vh-80px)] overflow-hidden">
+        <div className="flex-1 h-0 min-h-0 w-full max-w-7xl mx-auto p-3 md:p-6 flex flex-col md:flex-row gap-4 overflow-hidden">
           
           {/* SIDEBAR LISTS (Rooms, Active Users, Settings) */}
           <section className={`
@@ -721,7 +727,7 @@ export default function App() {
             </header>
 
             {/* MESSAGE HISTORY SCROLLER */}
-            <div className="flex-grow overflow-y-auto p-4 md:p-6 space-y-4">
+            <div ref={chatContainerRef} className="flex-grow overflow-y-auto p-4 md:p-6 space-y-4">
               
               {/* Informative notification if they are alone with help option */}
               {messages.length === 0 && (
