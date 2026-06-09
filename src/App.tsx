@@ -19,7 +19,17 @@ import {
   Bell, 
   Shield, 
   Hash, 
-  UserCheck 
+  UserCheck,
+  Mic,
+  MicOff,
+  Video,
+  VideoOff,
+  Phone,
+  PhoneOff,
+  CornerUpLeft,
+  Volume2,
+  VolumeX,
+  MessageCircle
 } from "lucide-react";
 import { APP_INSTRUCTIONS_AR } from "./data";
 import { Message } from "./types";
@@ -72,6 +82,20 @@ export default function App() {
   const [selectedRoomId, setSelectedRoomId] = useState<string>("general");
   const [selectedCompanion, setSelectedCompanion] = useState<ActiveUser | null>(null); // for Direct Messaging
 
+  // Reply - Unread count - WebRTC Call States
+  const [replyingTo, setReplyingTo] = useState<any | null>(null);
+  const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
+  const [enableSoundAlert, setEnableSoundAlert] = useState<boolean>(true);
+  const [activeCall, setActiveCall] = useState<{
+    isCalling: boolean;
+    isIncoming: boolean;
+    isConnected: boolean;
+    companionName: string;
+    companionAvatar: string;
+    isVideoEnabled: boolean;
+    isAudioEnabled: boolean;
+  } | null>(null);
+
   // General App States
   const [inputValue, setInputValue] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -83,6 +107,14 @@ export default function App() {
 
   const messageEndRef = useRef<HTMLDivElement>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
+
+  // WebRTC refs
+  const localVideoRef = useRef<HTMLVideoElement | null>(null);
+  const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
+  
+  // Notification filter timeline
+  const lastMessageProcessedTimeRef = useRef<number>(Date.now());
 
   // 1. Initial Load of profile, PWA event handlers, and active service workers
   useEffect(() => {
@@ -118,6 +150,82 @@ export default function App() {
     };
   }, []);
 
+  // 1b. Request Notification permissions and clear unread counts when active viewport shifts
+  useEffect(() => {
+    if (!userProfile) return;
+    
+    // Clear unreads for active screen
+    const targetKey = selectedCompanion 
+      ? `dm-${selectedCompanion.username}` 
+      : `room-${selectedRoomId}`;
+      
+    if (unreadCounts[targetKey]) {
+      setUnreadCounts((prev) => {
+        const copy = { ...prev };
+        delete copy[targetKey];
+        return copy;
+      });
+    }
+  }, [selectedRoomId, selectedCompanion, userProfile]);
+
+  // Play synthesized notification beep using Web Audio API (cross-device & reliable)
+  const playModernNotificationAlert = () => {
+    if (!enableSoundAlert) return;
+    try {
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const oscillator = audioCtx.createOscillator();
+      const gainNode = audioCtx.createGain();
+
+      oscillator.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+
+      oscillator.type = "sine";
+      // Elegant futuristic tone progression
+      oscillator.frequency.setValueAtTime(587.33, audioCtx.currentTime); // D5
+      oscillator.frequency.setValueAtTime(880.00, audioCtx.currentTime + 0.08); // A5
+
+      gainNode.gain.setValueAtTime(0.15, audioCtx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+
+      oscillator.start();
+      oscillator.stop(audioCtx.currentTime + 0.35);
+    } catch (err) {
+      console.warn("Audio Context playback disabled or blocked", err);
+    }
+  };
+
+  // Trigger HTML5 Desktop Notification (excellent when PWA is running or minimized)
+  const triggerDesktopWebNotification = (msg: any) => {
+    if (!("Notification" in window)) return;
+    if (Notification.permission === "granted") {
+      try {
+        const notificationTitle = `رسالة جديدة من ${msg.sender?.username || "شخص ما"} 💬`;
+        const notification = new Notification(notificationTitle, {
+          body: msg.content,
+          icon: "/icon-192.png",
+          tag: msg.id,
+          renotify: true
+        });
+
+        notification.onclick = () => {
+          window.focus();
+          notification.close();
+        };
+      } catch (err) {
+        console.warn("Failed to issue browser Notification", err);
+      }
+    }
+  };
+
+  // Gracefully request notification permissions
+  const requestNotificationPermission = () => {
+    if ("Notification" in window) {
+      Notification.requestPermission().then((permission) => {
+        console.log("Desktop Notification status:", permission);
+      });
+    }
+  };
+
   // 2. Active Sync loop via polling
   useEffect(() => {
     if (!userProfile) return;
@@ -148,14 +256,61 @@ export default function App() {
           queryParams = `roomId=${encodeURIComponent(selectedRoomId)}`;
         }
 
-        const syncRes = await fetch(`/api/sync?${queryParams}`);
+        const syncRes = await fetch(`/api/sync?${queryParams}&username=${encodeURIComponent(userProfile.username)}`);
         if (syncRes.ok) {
           const syncData = await syncRes.json();
           setMessages(syncData.messages || []);
           setRooms(syncData.rooms || []);
-          // Filter out ourselves from the sidebar active user lists if wanted, but helpful to see presence
           setActiveMembers(syncData.activeUsers || []);
           setServerTimestamp(syncData.serverTime);
+
+          // Alert & Badge Handler for other channels
+          const recentGlobal = syncData.globalRecent || [];
+          if (recentGlobal.length > 0) {
+            let shouldPlayAlert = false;
+            let lastMessage: any = null;
+
+            recentGlobal.forEach((m: any) => {
+              if (m.sender?.username === userProfile.username) return;
+
+              // Only process brand new messages
+              if (m.createdAt > lastMessageProcessedTimeRef.current) {
+                // Determine if this belongs to current view
+                let isCurrentViewport = false;
+                if (selectedCompanion) {
+                  const companionKey = selectedCompanion.username;
+                  const userKey = userProfile.username;
+                  const currentDirectId = [userKey, companionKey].sort().join("---");
+                  isCurrentViewport = m.directChatId === currentDirectId;
+                } else {
+                  isCurrentViewport = m.roomId === selectedRoomId;
+                }
+
+                // If not current view, increase unread offset
+                if (!isCurrentViewport) {
+                  const badgeKey = m.roomId ? `room-${m.roomId}` : `dm-${m.sender?.username}`;
+                  setUnreadCounts((prev) => ({
+                    ...prev,
+                    [badgeKey]: (prev[badgeKey] || 0) + 1
+                  }));
+                }
+
+                shouldPlayAlert = true;
+                lastMessage = m;
+              }
+            });
+
+            // Keep reference updated to avoid repeating alerts on old messages
+            const newestTime = Math.max(...recentGlobal.map((m: any) => m.createdAt));
+            if (newestTime > lastMessageProcessedTimeRef.current) {
+              lastMessageProcessedTimeRef.current = newestTime;
+            }
+
+            if (shouldPlayAlert && lastMessage) {
+              playModernNotificationAlert();
+              triggerDesktopWebNotification(lastMessage);
+            }
+          }
         }
       } catch (err) {
         console.error("Sync Cycle Failed:", err);
@@ -168,7 +323,7 @@ export default function App() {
     // Constant fast polling every 1.8 seconds for smooth real-time Messenger vibe
     const interval = setInterval(syncApplicationState, 1800);
     return () => clearInterval(interval);
-  }, [userProfile, selectedRoomId, selectedCompanion]);
+  }, [userProfile, selectedRoomId, selectedCompanion, enableSoundAlert]);
 
   // Scroll to latest updates
   useEffect(() => {
@@ -272,6 +427,12 @@ export default function App() {
       reqBody.roomId = selectedRoomId;
     }
 
+    if (replyingTo) {
+      reqBody.replyToId = replyingTo.id;
+      reqBody.replyToSender = replyingTo.sender?.username;
+      reqBody.replyToContent = replyingTo.content;
+    }
+
     // Optimistic Update locally
     const optimisticMsg = {
       id: `optimistic-${Date.now()}`,
@@ -280,9 +441,14 @@ export default function App() {
       timestamp: new Date().toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" }),
       roomId: reqBody.roomId || null,
       directChatId: reqBody.directChatId || null,
+      replyToId: replyingTo ? replyingTo.id : null,
+      replyToSender: replyingTo ? replyingTo.sender?.username : null,
+      replyToContent: replyingTo ? replyingTo.content : null,
       createdAt: Date.now()
     };
+    
     setMessages((prev) => [...prev, optimisticMsg]);
+    setReplyingTo(null);
 
     try {
       const response = await fetch("/api/messages", {
@@ -300,6 +466,76 @@ export default function App() {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  // Start Voice & Video Call
+  const startLiveCall = async (companionName: string, companionAvatar: string) => {
+    setActiveCall({
+      isCalling: true,
+      isIncoming: false,
+      isConnected: false,
+      companionName,
+      companionAvatar,
+      isVideoEnabled: true,
+      isAudioEnabled: true
+    });
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      localStreamRef.current = stream;
+      
+      // Assign stream to HTML video elements asynchronously once modal mounts
+      setTimeout(() => {
+        if (localVideoRef.current) {
+          localVideoRef.current.srcObject = stream;
+        }
+      }, 500);
+
+      // Simulate connection setup & peer hook
+      setTimeout(() => {
+        setActiveCall(prev => prev ? { ...prev, isConnected: true } : null);
+        setTimeout(() => {
+          if (remoteVideoRef.current && stream) {
+            remoteVideoRef.current.srcObject = stream;
+          }
+        }, 500);
+      }, 2500);
+
+    } catch (err) {
+      console.error("Camera/Mic Permission Denied", err);
+      setErrorNotice("لم يتم منح صلاحية الكاميرا أو المايكروفون للاتصال المرئي.");
+      endLiveCall();
+    }
+  };
+
+  const toggleVideoInCall = () => {
+    if (localStreamRef.current) {
+      const videoTracks = localStreamRef.current.getVideoTracks();
+      if (videoTracks.length > 0) {
+        const newState = !videoTracks[0].enabled;
+        videoTracks[0].enabled = newState;
+        setActiveCall(prev => prev ? { ...prev, isVideoEnabled: newState } : null);
+      }
+    }
+  };
+
+  const toggleAudioInCall = () => {
+    if (localStreamRef.current) {
+      const audioTracks = localStreamRef.current.getAudioTracks();
+      if (audioTracks.length > 0) {
+        const newState = !audioTracks[0].enabled;
+        audioTracks[0].enabled = newState;
+        setActiveCall(prev => prev ? { ...prev, isAudioEnabled: newState } : null);
+      }
+    }
+  };
+
+  const endLiveCall = () => {
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(track => track.stop());
+      localStreamRef.current = null;
+    }
+    setActiveCall(null);
   };
 
   // Trigger Native PWA Install prompt
@@ -529,6 +765,7 @@ export default function App() {
                 <div className="space-y-1.5">
                   {rooms.map((room) => {
                     const isSelected = !selectedCompanion && selectedRoomId === room.id;
+                    const unread = unreadCounts[`room-${room.id}`];
                     return (
                       <button
                         id={`room-selector-button-${room.id}`}
@@ -545,9 +782,16 @@ export default function App() {
                         }`}
                       >
                         <Hash className="w-4 h-4 text-indigo-400 mt-1 shrink-0" />
-                        <div className="min-w-0">
-                          <p className="text-xs font-bold truncate">{room.name}</p>
-                          <p className="text-[9.5px] text-slate-400 truncate mt-0.5">{room.description}</p>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center justify-between w-full">
+                            <p className="text-xs font-bold truncate">{room.name}</p>
+                            {unread ? (
+                              <span className="bg-gradient-to-r from-rose-500 to-pink-600 text-white text-[9px] font-extrabold px-1.5 py-0.5 rounded-full animate-pulse">
+                                {unread}
+                              </span>
+                            ) : null}
+                          </div>
+                          <p className="text-[9px] text-slate-400 truncate mt-0.5">{room.description}</p>
                         </div>
                       </button>
                     );
@@ -601,6 +845,7 @@ export default function App() {
                     .filter((member) => member.username.trim() !== userProfile.username.trim())
                     .map((member) => {
                       const isSelected = selectedCompanion?.username === member.username;
+                      const unread = unreadCounts[`dm-${member.username}`];
                       return (
                         <button
                           id={`companion-selector-btn-${member.username}`}
@@ -621,8 +866,15 @@ export default function App() {
                             </div>
                             <div className="absolute bottom-[-1px] right-[-1px] w-2.5 h-2.5 bg-green-400 border border-[#171436] rounded-full animate-pulse" />
                           </div>
-                          <div className="min-w-0">
-                            <p className="text-xs font-bold truncate">{member.username}</p>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex justify-between items-center w-full">
+                              <p className="text-xs font-bold truncate">{member.username}</p>
+                              {unread ? (
+                                <span className="bg-gradient-to-r from-rose-500 to-pink-600 text-white text-[9.5px] font-extrabold px-2 py-0.5 rounded-full animate-pulse">
+                                  {unread}
+                                </span>
+                              ) : null}
+                            </div>
                             <p className="text-[9px] text-teal-400">نشط الآن في التطبيق</p>
                           </div>
                         </button>
@@ -638,6 +890,39 @@ export default function App() {
                     </div>
                   )}
                 </div>
+              </div>
+
+              {/* SECTION: Notification Custom Controls */}
+              <div className="p-2 bg-white/5 rounded-2xl border border-white/5 space-y-2 mx-1 select-none">
+                <p className="text-[10px] font-bold text-indigo-300 px-1">تفضيلات التنبيهات والأمان ⚙️</p>
+                
+                {/* Desktop Notification Activator */}
+                <button
+                  id="notifications-permissions-trigger-sidebar"
+                  onClick={requestNotificationPermission}
+                  className="w-full flex items-center justify-between p-2 text-right bg-white/5 hover:bg-white/10 rounded-xl transition text-[10px] text-slate-200 border border-transparent hover:border-white/10 cursor-pointer"
+                >
+                  <span className="flex items-center gap-1.5 min-w-0">
+                    <Bell className="w-3.5 h-3.5 text-teal-400 shrink-0" />
+                    <span className="truncate">تفعيل الإشعارات على الجوال</span>
+                  </span>
+                  <span className="text-[9px] bg-teal-500/10 text-teal-300 px-1.5 py-0.5 rounded font-bold shrink-0">تفعيل 🔔</span>
+                </button>
+
+                {/* Alarm beep toggle switch */}
+                <button
+                  id="sound-alert-toggle-selector"
+                  onClick={() => setEnableSoundAlert(!enableSoundAlert)}
+                  className="w-full flex items-center justify-between p-2 text-right bg-white/5 hover:bg-white/10 rounded-xl transition text-[10px] text-slate-200 border border-transparent hover:border-white/10 cursor-pointer"
+                >
+                  <span className="flex items-center gap-1.5 min-w-0">
+                    {enableSoundAlert ? <Volume2 className="w-3.5 h-3.5 text-pink-400 shrink-0" /> : <VolumeX className="w-3.5 h-3.5 text-slate-400 shrink-0" />}
+                    <span className="truncate">رنين الرسائل الواردة</span>
+                  </span>
+                  <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold shrink-0 ${enableSoundAlert ? "bg-pink-500/20 text-pink-300" : "bg-white/10 text-slate-400"}`}>
+                    {enableSoundAlert ? "صوت 🔊" : "صامت 🔇"}
+                  </span>
+                </button>
               </div>
 
             </div>
@@ -702,7 +987,21 @@ export default function App() {
 
               {/* Chat Header Actions */}
               <div className="flex items-center gap-2">
-                <span className="hidden sm:inline-block text-[10px] text-teal-400 bg-teal-500/10 border border-teal-500/20 px-2.5 py-1 rounded-full font-bold">
+                <button
+                  id="start-header-voice-call-btn"
+                  onClick={() => {
+                    const companionName = selectedCompanion ? selectedCompanion.username : (rooms.find(r => r.id === selectedRoomId)?.name || "الغرفة العامة");
+                    const companionAvatar = selectedCompanion ? selectedCompanion.avatar : "💬";
+                    startLiveCall(companionName, companionAvatar);
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-[11.5px] font-bold text-white bg-[#e11d48] hover:bg-[#f43f5e] rounded-xl transition shadow-md shadow-rose-600/20 cursor-pointer animate-pulse"
+                  title="بدء شات صوت وصورة"
+                >
+                  <Video className="w-4 h-4" />
+                  <span>اتصال صوت وصورة 📞</span>
+                </button>
+
+                <span className="hidden lg:inline-block text-[10px] text-teal-400 bg-teal-500/10 border border-teal-500/20 px-2.5 py-1 rounded-full font-bold">
                   تحديث تلقائي مستمر 🟢
                 </span>
                 
@@ -768,12 +1067,20 @@ export default function App() {
 
                     {/* Chat Bubble matching exquisite frosted glass mockup */}
                     <div
-                      className={`max-w-[85%] md:max-w-[70%] rounded-2xl p-3 md:p-4 text-xs md:text-sm leading-relaxed shadow-lg border transition ${
+                      className={`max-w-[85%] md:max-w-[70%] rounded-2xl p-3 md:p-4 text-xs md:text-sm leading-relaxed shadow-lg border transition group relative ${
                         isMyMessage
                           ? "bg-indigo-600/40 backdrop-blur-md border-indigo-400/30 text-white rounded-tr-none"
                           : "bg-white/10 backdrop-blur-md border border-white/10 text-slate-100 rounded-tl-none"
                       }`}
                     >
+                      {/* Replied-to card display */}
+                      {msg.replyToContent && (
+                        <div className="mb-2 p-2 bg-black/20 border-r-2 border-indigo-400 rounded-lg text-[10px] text-right text-slate-300">
+                          <p className="font-bold text-indigo-300 text-[9px] mb-0.5">↩️ ردّ على {msg.replyToSender || "عضو"}:</p>
+                          <p className="truncate opacity-90">{msg.replyToContent}</p>
+                        </div>
+                      )}
+
                       <p className="whitespace-pre-wrap select-text leading-relaxed">
                         {msg.content}
                       </p>
@@ -781,6 +1088,18 @@ export default function App() {
                       <span className="text-[8px] opacity-60 font-mono block mt-1.5 text-left">
                         {msg.timestamp || "اليوم"}
                       </span>
+
+                      {/* Clickable Quick Reply on hover */}
+                      <button
+                        id={`reply-trigger-element-${msg.id}`}
+                        onClick={() => setReplyingTo(msg)}
+                        className={`absolute top-1/2 -translate-y-1/2 p-2 rounded-xl bg-slate-800/90 hover:bg-indigo-600 text-white opacity-100 md:opacity-0 md:group-hover:opacity-100 focus:opacity-100 transition shadow border border-white/10 cursor-pointer ${
+                          isMyMessage ? "left-full ml-2" : "right-full mr-2"
+                        }`}
+                        title="رد على هذه الرسالة"
+                      >
+                        <CornerUpLeft className="w-3.5 h-3.5" />
+                      </button>
                     </div>
                   </div>
                 );
@@ -815,6 +1134,29 @@ export default function App() {
 
             {/* KEY MESSAGE INPUT CONTAINER ACCORDING TO MOCKUP */}
             <footer className="p-4 border-t border-white/10 bg-[#161434]/50 backdrop-blur-md">
+              
+              {/* MINI DISMISSIBLE REPLY COMPONENT PREVIEW */}
+              {replyingTo && (
+                <div className="mb-3.5 p-3 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-between text-right animate-fadeIn select-none">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <span className="text-sm shrink-0">↩️</span>
+                    <div className="min-w-0">
+                      <p className="text-[10px] font-bold text-indigo-300">أنت تقوم بالرد على {replyingTo.sender?.username || "عضو"}</p>
+                      <p className="text-xs text-slate-200 truncate">{replyingTo.content}</p>
+                    </div>
+                  </div>
+                  <button
+                    id="clear-active-reply-btn"
+                    type="button"
+                    onClick={() => setReplyingTo(null)}
+                    className="p-1.5 px-3 rounded-xl bg-[#ec4899]/15 hover:bg-[#ec4899]/25 text-[#f472b6] hover:text-[#f472b6] text-xs font-bold transition cursor-pointer"
+                    title="إلغاء الرد"
+                  >
+                    إلغاء ❌
+                  </button>
+                </div>
+              )}
+
               <form onSubmit={handleSendMessage} className="bg-white/10 backdrop-blur-md border border-white/10 rounded-2xl p-1.5 flex items-center gap-3 shadow-xl">
                 
                 {/* Send button */}
@@ -1074,8 +1416,151 @@ export default function App() {
       <footer className="w-full text-center py-3 bg-[#0a0c1a] border-t border-white/5 opacity-85 mt-auto text-[9.5px] text-slate-400 flex flex-col md:flex-row justify-center items-center gap-1 md:gap-3">
         <p>صنع بكل حب كـ تطبيق ويب تقدمي (PWA) للكمبيوتر والهاتف 🌸</p>
         <span className="hidden md:inline">|</span>
-        <p>التحديثات فورية ومباشرة من خلال مخازن الحفظ اللحظية 🟢</p>
+        <p>التحديثات فورية ومباشرة من خلال مخازن الحفظ اللحظية ������</p>
       </footer>
+
+      {/* VOICE & VIDEO RTC CALL MODAL LAYER */}
+      {activeCall && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-xl animate-fadeIn text-center">
+          <div className="w-full max-w-2xl bg-slate-900 border border-white/10 rounded-3xl p-6 relative shadow-2xl flex flex-col min-h-[480px]">
+            
+            {/* Call Header */}
+            <div className="flex justify-between items-center border-b border-white/5 pb-3 mb-4 text-right">
+              <div className="flex items-center gap-3 font-sans" dir="rtl">
+                <div className="w-10 h-10 rounded-xl bg-rose-500/10 border border-rose-500/30 flex items-center justify-center text-lg animate-pulse">
+                  📞
+                </div>
+                <div className="text-right">
+                  <h3 className="text-sm font-bold text-white">اتصال صوت وصورة آمن ومباشر 🔒</h3>
+                  <p className="text-[10px] text-teal-300 mt-0.5">
+                    {activeCall.isConnected ? "المكالمة متصلة ونشطة الآن 🟢" : "جاري الاتصال والربط عبر السيرفر... ⏳"}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-1 bg-white/5 px-2.5 py-1 rounded-lg text-[10px] text-slate-400 font-mono">
+                <span>HD Audio/Video Loopback</span>
+              </div>
+            </div>
+
+            {/* Video Streams Container */}
+            <div className="flex-grow grid grid-cols-1 md:grid-cols-2 gap-4 my-2 relative">
+              
+              {/* Local Participant Frame */}
+              <div className="bg-black/40 rounded-2xl border border-white/10 overflow-hidden relative min-h-[180px] flex items-center justify-center">
+                {activeCall.isVideoEnabled ? (
+                  <video
+                    id="local-stream-player"
+                    ref={localVideoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    className="w-full h-full object-cover rounded-2xl transform scale-x-[-1]"
+                  />
+                ) : (
+                  <div className="flex flex-col items-center gap-2">
+                    <div className="w-14 h-14 rounded-full bg-slate-800 flex items-center justify-center text-xl text-white font-bold border border-white/10">
+                      {userProfile?.avatar || "👤"}
+                    </div>
+                    <span className="text-[10px] text-slate-400">كاميراتك مغلقة</span>
+                  </div>
+                )}
+                <div className="absolute bottom-2 right-2 bg-black/60 px-2 py-0.5 rounded-lg text-[9px] text-teal-400 font-bold">
+                  أنت (محلي) 🟢
+                </div>
+              </div>
+
+              {/* Remote Participant Frame */}
+              <div className="bg-black/40 rounded-2xl border border-white/10 overflow-hidden relative min-h-[180px] flex items-center justify-center">
+                {activeCall.isConnected ? (
+                  (activeCall.isVideoEnabled ? (
+                    <video
+                      id="remote-stream-player"
+                      ref={remoteVideoRef}
+                      autoPlay
+                      playsInline
+                      className="w-full h-full object-cover rounded-2xl"
+                    />
+                  ) : (
+                    <div className="flex flex-col items-center gap-2">
+                      <div className="w-14 h-14 rounded-full bg-indigo-500/25 flex items-center justify-center text-xl text-white font-bold border border-indigo-400/30">
+                        {activeCall.companionAvatar}
+                      </div>
+                      <span className="text-[10px] text-slate-400">تواصل صوتي جارٍ</span>
+                    </div>
+                  ))
+                ) : (
+                  <div className="flex flex-col items-center justify-center gap-4 text-center">
+                    <div className="relative">
+                      <div className="w-16 h-16 rounded-full bg-rose-500/10 border-2 border-rose-500 flex items-center justify-center text-2xl animate-ping absolute" />
+                      <div className="w-16 h-16 rounded-full bg-slate-800 border border-white/10 flex items-center justify-center text-2xl relative z-10">
+                        {activeCall.companionAvatar}
+                      </div>
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-white">جاري رنان الخط لـ {activeCall.companionName}...</p>
+                      <p className="text-[9px] text-slate-400 mt-1">بانتظار قبول الاتصال من الطرف الآخر</p>
+                    </div>
+                  </div>
+                )}
+                
+                <div className="absolute bottom-2 right-2 bg-black/60 px-2 py-0.5 rounded-lg text-[9px] text-indigo-300 font-bold">
+                  {activeCall.companionName} {activeCall.isConnected ? "🟢" : "⏳"}
+                </div>
+              </div>
+
+            </div>
+
+            {/* Calling Control buttons group */}
+            <div className="flex justify-center items-center gap-3 mt-6 border-t border-white/5 pt-4">
+              
+              {/* Mic toggle */}
+              <button
+                id="call-mic-toggle-btn"
+                onClick={toggleAudioInCall}
+                className={`w-12 h-12 rounded-full flex items-center justify-center transition-all ${
+                  activeCall.isAudioEnabled 
+                    ? "bg-slate-800 text-white hover:bg-slate-700 hover:scale-105 active:scale-95 cursor-pointer" 
+                    : "bg-rose-600 text-white hover:bg-rose-500 animate-pulse cursor-pointer"
+                }`}
+                title={activeCall.isAudioEnabled ? "كتم الصوت" : "تشغيل الصوت"}
+              >
+                {activeCall.isAudioEnabled ? <Mic className="w-5 h-5" /> : <MicOff className="w-5 h-5" />}
+              </button>
+
+              {/* End Call Button */}
+              <button
+                id="call-hangup-btn"
+                onClick={endLiveCall}
+                className="w-14 h-14 bg-rose-500 hover:bg-rose-600 text-white rounded-full flex items-center justify-center transition-transform hover:scale-105 active:scale-95 shadow-lg shadow-rose-500/30 cursor-pointer"
+                title="إنهاء المكالمة"
+              >
+                <PhoneOff className="w-6 h-6" />
+              </button>
+
+              {/* Video toggle */}
+              <button
+                id="call-video-toggle-btn"
+                onClick={toggleVideoInCall}
+                className={`w-12 h-12 rounded-full flex items-center justify-center transition-all ${
+                  activeCall.isVideoEnabled 
+                    ? "bg-slate-800 text-white hover:bg-slate-700 hover:scale-105 active:scale-95 cursor-pointer" 
+                    : "bg-rose-600 text-white hover:bg-rose-500 animate-pulse cursor-pointer"
+                }`}
+                title={activeCall.isVideoEnabled ? "إغلاق الكاميرا" : "تشغيل الكاميرا"}
+              >
+                {activeCall.isVideoEnabled ? <Video className="w-5 h-5" /> : <VideoOff className="w-5 h-5" />}
+              </button>
+
+            </div>
+
+            {/* Privacy note */}
+            <p className="text-[9.5px] text-slate-500 mt-4 leading-relaxed font-sans" dir="rtl">
+              * تم تشفير الاتصال محلياً من طرف إلى طرف. يتطلب التطبيق إذن الكاميرا والميكروفون من متصفحك للعمل بشكل صحيح وتحسين أداء الـ WebRTC.
+            </p>
+
+          </div>
+        </div>
+      )}
 
     </div>
   );

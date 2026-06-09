@@ -169,10 +169,10 @@ async function startServer() {
 
   // Get app global state (Active Users, Rooms, Messages)
   app.get("/api/sync", (req: express.Request, res: express.Response) => {
-    const { since = 0, roomId, directChatId } = req.query;
+    const { since = 0, roomId, directChatId, username } = req.query;
     const sinceTime = parseInt(since as string, 10) || 0;
 
-    // Filter messages according to roomId OR directChatId
+    // Filter messages according to roomId OR directChatId for current main viewport
     let filtered = dbMessages.filter((m) => m.createdAt > sinceTime);
 
     if (roomId) {
@@ -184,10 +184,24 @@ async function startServer() {
       filtered = filtered.filter((m) => m.roomId === "general");
     }
 
+    // Filter secure global recent messages for notification flags & badging
+    const cleanUser = (username as string || "").trim().toLowerCase();
+    const globalRecent = dbMessages.filter((m) => {
+      // Public messages
+      if (m.roomId) return true;
+      // Private messages must belong to this requesting user
+      if (m.directChatId && cleanUser) {
+        const parts = m.directChatId.toLowerCase().split("---");
+        return parts.includes(cleanUser);
+      }
+      return false;
+    }).slice(-40); // Grab the 40 most recent messages
+
     res.json({
       messages: filtered,
       rooms: dbRooms,
       activeUsers: Object.values(activeUsers),
+      globalRecent: globalRecent,
       serverTime: Date.now()
     });
   });
@@ -253,7 +267,7 @@ async function startServer() {
   // Post a new message
   app.post("/api/messages", async (req: express.Request, res: express.Response) => {
     try {
-      const { content, roomId, directChatId, sender } = req.body;
+      const { content, roomId, directChatId, sender, replyToId, replyToSender, replyToContent } = req.body;
 
       if (!content || !sender || !sender.username) {
         return res.status(400).json({ error: "Content and sender details are required" });
@@ -269,6 +283,9 @@ async function startServer() {
         },
         roomId: roomId || null,
         directChatId: directChatId || null,
+        replyToId: replyToId || null,
+        replyToSender: replyToSender || null,
+        replyToContent: replyToContent || null,
         timestamp: new Date().toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" }),
         createdAt: Date.now()
       };
