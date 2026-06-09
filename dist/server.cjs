@@ -155,7 +155,7 @@ async function startServer() {
     res.json({ status: "healthy", activeUsersCount: Object.keys(activeUsers).length });
   });
   app.get("/api/sync", (req, res) => {
-    const { since = 0, roomId, directChatId } = req.query;
+    const { since = 0, roomId, directChatId, username } = req.query;
     const sinceTime = parseInt(since, 10) || 0;
     let filtered = dbMessages.filter((m) => m.createdAt > sinceTime);
     if (roomId) {
@@ -165,10 +165,20 @@ async function startServer() {
     } else {
       filtered = filtered.filter((m) => m.roomId === "general");
     }
+    const cleanUser = (username || "").trim().toLowerCase();
+    const globalRecent = dbMessages.filter((m) => {
+      if (m.roomId) return true;
+      if (m.directChatId && cleanUser) {
+        const parts = m.directChatId.toLowerCase().split("---");
+        return parts.includes(cleanUser);
+      }
+      return false;
+    }).slice(-40);
     res.json({
       messages: filtered,
       rooms: dbRooms,
       activeUsers: Object.values(activeUsers),
+      globalRecent,
       serverTime: Date.now()
     });
   });
@@ -217,7 +227,7 @@ async function startServer() {
   });
   app.post("/api/messages", async (req, res) => {
     try {
-      const { content, roomId, directChatId, sender } = req.body;
+      const { content, roomId, directChatId, sender, replyToId, replyToSender, replyToContent } = req.body;
       if (!content || !sender || !sender.username) {
         return res.status(400).json({ error: "Content and sender details are required" });
       }
@@ -231,6 +241,9 @@ async function startServer() {
         },
         roomId: roomId || null,
         directChatId: directChatId || null,
+        replyToId: replyToId || null,
+        replyToSender: replyToSender || null,
+        replyToContent: replyToContent || null,
         timestamp: (/* @__PURE__ */ new Date()).toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" }),
         createdAt: Date.now()
       };
