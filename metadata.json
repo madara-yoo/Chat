@@ -1,6 +1,6 @@
 {
   "name": "chat",
   "description": "A Progressive Web App (PWA) chat application that can be installed on phones and computers as an icon, featuring smart AI companions powered by Gemini.",
-  "requestFramePermissions": [],
+  "requestFramePermissions": ["camera", "microphone"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
