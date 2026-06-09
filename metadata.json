@@ -1,6 +1,6 @@
 {
-  "name": "chat",
-  "description": "A Progressive Web App (PWA) chat application that can be installed on phones and computers as an icon, featuring smart AI companions powered by Gemini.",
+  "name": "مادارا شات",
+  "description": "تطبيق ويب تقدمي (PWA) للدردشة والمحادثات الفورية الآمنة المشفرة، يدعم التثبيت الفوري كأيقونة على الهواتف وأجهزة الكمبيوتر.",
   "requestFramePermissions": ["camera", "microphone"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

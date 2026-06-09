@@ -1,7 +1,6 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
-import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
 
 // Load environment variables
@@ -28,7 +27,7 @@ if (!fs.existsSync(DATA_DIR)) {
 // In-Memory state fallback / cache
 let dbMessages: any[] = [];
 let dbRooms: any[] = [...DEFAULT_ROOMS];
-let activeUsers: Record<string, { username: string; avatar: string; color: string; lastSeen: number }> = {};
+let activeUsers: Record<string, { username: string; avatar: string; color: string; lastSeen: number; isTypingIn?: string | null }> = {};
 
 // Load persisted data
 try {
@@ -39,8 +38,8 @@ try {
     dbMessages = [
       {
         id: "wel-1",
-        content: "مرحباً بكم في تطبيق أنيس ماسنجر! 🎉 شات مخصص للمستخدمين يدعم التثبيت على الهاتف كأيقونة مستقلة. جرب دعوة أصدقائك بفتح نفس الرابط للتحدث معهم فوراً!",
-        sender: { username: "نظام أنيس", avatar: "📢", color: "from-teal-500 to-indigo-500" },
+        content: "مرحباً بكم في تطبيق مادارا ماسنجر! 🎉 شات مخصص للمستخدمين يدعم التثبيت على الهاتف كأيقونة مستقلة وبدون برمجيات ذكاء اصطناعي. جرب دعوة أصدقائك بفتح نفس الرابط للتحدث معهم فوراً!",
+        sender: { username: "نظام مادارا 👁️", avatar: "🔴", color: "from-rose-600 to-indigo-950" },
         roomId: "general",
         timestamp: new Date().toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" }),
         createdAt: Date.now()
@@ -79,71 +78,6 @@ function persistRooms() {
   }
 }
 
-// Gemini AI Setup (for smart AI assistance)
-let aiClient: GoogleGenAI | null = null;
-function getGeminiClient(): GoogleGenAI | null {
-  if (!aiClient) {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (apiKey) {
-      aiClient = new GoogleGenAI({
-        apiKey: apiKey,
-        httpOptions: {
-          headers: {
-            "User-Agent": "aistudio-build",
-          },
-        },
-      });
-    }
-  }
-  return aiClient;
-}
-
-// System Persona instructions for the AI agent
-const AI_SYSTEM_INSTRUCTION = `
-أنت 'أنيس الذكي'، مساعد مدمج في تطبيق "أنيس ماسنجر" للمستخدمين.
-عندما يناديك المستخدم بـ @أنيس أو يتحدث معك في روم خاص، قم بالإجابة عليه بطريقة دافئة ومختصرة باللغة العربية الفصحى الجميلة وبشكل يناسب طبيعة الماسنجر السريعة.
-استخدم الرموز التعبيرية 🌸✨💻 لتبدو ودوداً. يرجى ألا تتجاوز إجاباتك طول رسالة شات نموذجية (فقرة أو فقرتين كحد أقصى).
-`;
-
-async function triggerAIBotResponse(messageContent: string, replyToRoomId?: string, replyToDirectId?: string, userNickname?: string) {
-  const ai = getGeminiClient();
-  if (!ai) return;
-
-  try {
-    // Generate simple AI response
-    const cleanedPrompt = messageContent.replace(/@أنيس/gi, "").trim();
-    
-    // Call Gemini Flash
-    const result = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: [
-        { role: "user", parts: [{ text: `المرسل: ${userNickname || "شخص ما"}\nالرسالة: ${cleanedPrompt}` }] }
-      ],
-      config: {
-        systemInstruction: AI_SYSTEM_INSTRUCTION,
-        temperature: 0.8,
-      }
-    });
-
-    const replyText = result.text || "أهلاً بك! لم أستطع فهم رسالتك بوضوح، ولكنني هنا دوماً لمساعدتك ✨";
-
-    const aiMessage = {
-      id: `ai-${Date.now()}`,
-      content: replyText,
-      sender: { username: "أنيس (الذكاء الاصطناعي) 🤖", avatar: "🌸", color: "from-teal-400 to-emerald-400" },
-      roomId: replyToRoomId || null,
-      directChatId: replyToDirectId || null,
-      timestamp: new Date().toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" }),
-      createdAt: Date.now()
-    };
-
-    dbMessages.push(aiMessage);
-    persistMessages();
-  } catch (err) {
-    console.error("Error invoking Gemini Bot helper:", err);
-  }
-}
-
 async function startServer() {
   const app = express();
   const PORT = 3000;
@@ -172,6 +106,26 @@ async function startServer() {
     const { since = 0, roomId, directChatId, username } = req.query;
     const sinceTime = parseInt(since as string, 10) || 0;
 
+    const cleanUser = (username as string || "").trim().toLowerCase();
+
+    // Mark messages as read by current user
+    if (cleanUser) {
+      dbMessages.forEach((m) => {
+        const isTargetRoom = roomId && m.roomId === roomId;
+        const isTargetDM = directChatId && m.directChatId === directChatId;
+        const notMe = m.sender?.username?.trim().toLowerCase() !== cleanUser;
+
+        if ((isTargetRoom || isTargetDM) && notMe) {
+          if (!m.readBy) {
+            m.readBy = [];
+          }
+          if (!m.readBy.includes(cleanUser)) {
+            m.readBy.push(cleanUser);
+          }
+        }
+      });
+    }
+
     // Filter messages according to roomId OR directChatId for current main viewport
     let filtered = dbMessages.filter((m) => m.createdAt > sinceTime);
 
@@ -185,7 +139,6 @@ async function startServer() {
     }
 
     // Filter secure global recent messages for notification flags & badging
-    const cleanUser = (username as string || "").trim().toLowerCase();
     const globalRecent = dbMessages.filter((m) => {
       // Public messages
       if (m.roomId) return true;
@@ -208,7 +161,7 @@ async function startServer() {
 
   // User Heartbeat to broadcast presence
   app.post("/api/users/heartbeat", (req: express.Request, res: express.Response) => {
-    const { username, avatar, color } = req.body;
+    const { username, avatar, color, isTypingIn } = req.body;
     if (!username) {
       return res.status(400).json({ error: "Username is required" });
     }
@@ -218,7 +171,8 @@ async function startServer() {
       username: username.trim(),
       avatar: avatar || "👤",
       color: color || "from-slate-400 to-slate-500",
-      lastSeen: Date.now()
+      lastSeen: Date.now(),
+      isTypingIn: isTypingIn || null
     };
 
     res.json({ success: true, count: Object.keys(activeUsers).length });
@@ -287,24 +241,12 @@ async function startServer() {
         replyToSender: replyToSender || null,
         replyToContent: replyToContent || null,
         timestamp: new Date().toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" }),
-        createdAt: Date.now()
+        createdAt: Date.now(),
+        readBy: []
       };
 
       dbMessages.push(newMessage);
       persistMessages();
-
-      // Check if user is invoking the smart AI bot
-      // summons either via "@أنيس" in any public channel OR if sending a private message to user "أنيس" (directChatId containing "-أنيس" or "أنيس-")
-      const mentionsAI = content.includes("@أنيس") || content.includes("@anis");
-      const isPrivateAI = directChatId && (
-        directChatId.toLowerCase().includes("أنيس") || 
-        directChatId.toLowerCase().includes("anis")
-      );
-
-      if (mentionsAI || isPrivateAI) {
-        // Fire response in background non-blocking, so user sees their message sent instantly
-        triggerAIBotResponse(content, roomId, directChatId, sender.username);
-      }
 
       return res.json({ success: true, message: newMessage });
 

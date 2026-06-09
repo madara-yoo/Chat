@@ -79,7 +79,7 @@ export default function App() {
   const [serverTimestamp, setServerTimestamp] = useState<number>(0);
 
   // Active Conversational state
-  const [selectedRoomId, setSelectedRoomId] = useState<string>("general");
+  const [selectedRoomId, setSelectedRoomId] = useState<string>("");
   const [selectedCompanion, setSelectedCompanion] = useState<ActiveUser | null>(null); // for Direct Messaging
 
   // Reply - Unread count - WebRTC Call States
@@ -98,6 +98,8 @@ export default function App() {
 
   // General App States
   const [inputValue, setInputValue] = useState("");
+  const [localIsTyping, setLocalIsTyping] = useState<boolean>(false);
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [showCreateRoom, setShowCreateRoom] = useState(false);
   const [newRoomName, setNewRoomName] = useState("");
@@ -205,7 +207,7 @@ export default function App() {
           icon: "/icon-192.png",
           tag: msg.id,
           renotify: true
-        });
+        } as any);
 
         notification.onclick = () => {
           window.focus();
@@ -240,7 +242,10 @@ export default function App() {
           body: JSON.stringify({
             username: userProfile.username,
             avatar: userProfile.avatar,
-            color: userProfile.color
+            color: userProfile.color,
+            isTypingIn: localIsTyping 
+              ? (selectedCompanion ? `dm-${userProfile.username}` : `room-${selectedRoomId}`) 
+              : null
           })
         });
 
@@ -323,7 +328,7 @@ export default function App() {
     // Constant fast polling every 1.8 seconds for smooth real-time Messenger vibe
     const interval = setInterval(syncApplicationState, 1800);
     return () => clearInterval(interval);
-  }, [userProfile, selectedRoomId, selectedCompanion, enableSoundAlert]);
+  }, [userProfile, selectedRoomId, selectedCompanion, enableSoundAlert, localIsTyping]);
 
   // Scroll to latest updates
   useEffect(() => {
@@ -404,6 +409,11 @@ export default function App() {
     const textMsg = inputValue.trim();
     if (!textMsg || !userProfile) return;
 
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+    setLocalIsTyping(false);
+
     setInputValue("");
     setIsLoading(true);
 
@@ -469,24 +479,24 @@ export default function App() {
   };
 
   // Start Voice & Video Call
-  const startLiveCall = async (companionName: string, companionAvatar: string) => {
+  const startLiveCall = async (companionName: string, companionAvatar: string, withVideo: boolean = true) => {
     setActiveCall({
       isCalling: true,
       isIncoming: false,
       isConnected: false,
       companionName,
       companionAvatar,
-      isVideoEnabled: true,
+      isVideoEnabled: withVideo,
       isAudioEnabled: true
     });
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({ video: withVideo, audio: true });
       localStreamRef.current = stream;
       
       // Assign stream to HTML video elements asynchronously once modal mounts
       setTimeout(() => {
-        if (localVideoRef.current) {
+        if (localVideoRef.current && withVideo) {
           localVideoRef.current.srcObject = stream;
         }
       }, 500);
@@ -495,7 +505,7 @@ export default function App() {
       setTimeout(() => {
         setActiveCall(prev => prev ? { ...prev, isConnected: true } : null);
         setTimeout(() => {
-          if (remoteVideoRef.current && stream) {
+          if (remoteVideoRef.current && stream && withVideo) {
             remoteVideoRef.current.srcObject = stream;
           }
         }, 500);
@@ -503,7 +513,7 @@ export default function App() {
 
     } catch (err) {
       console.error("Camera/Mic Permission Denied", err);
-      setErrorNotice("لم يتم منح صلاحية الكاميرا أو المايكروفون للاتصال المرئي.");
+      setErrorNotice("لم يتم منح صلاحية المايكروفون أو الكاميرا لبدء الاتصال.");
       endLiveCall();
     }
   };
@@ -556,6 +566,30 @@ export default function App() {
     setInputValue((prev) => prev ? prev + " " + text : text);
   };
 
+  const handleInputChange = (value: string) => {
+    setInputValue(value);
+    setLocalIsTyping(true);
+
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+
+    typingTimeoutRef.current = setTimeout(() => {
+      setLocalIsTyping(false);
+    }, 3000);
+  };
+
+  const typingUsers = activeMembers.filter((m) => {
+    const isMe = m.username?.trim().toLowerCase() === userProfile?.username?.trim().toLowerCase();
+    if (isMe) return false;
+
+    if (selectedCompanion) {
+      return m.username === selectedCompanion.username && m.isTypingIn === `dm-${userProfile?.username}`;
+    } else {
+      return m.isTypingIn === `room-${selectedRoomId}`;
+    }
+  });
+
   return (
     <div className="relative h-screen min-h-[100dvh] w-full font-sans overflow-hidden flex flex-col bg-gradient-to-br from-[#120f26] via-[#1d163f] to-[#39123b]" dir="rtl">
       
@@ -571,20 +605,39 @@ export default function App() {
             <button 
               id="mobile-sidebar-toggle-trigger"
               onClick={() => setMobileSidebarOpen(!mobileSidebarOpen)} 
-              className="md:hidden p-2 text-white/90 hover:text-white rounded-xl bg-white/5 border border-white/10"
-              title="تصفح الغرف والأعضاء"
+              className="md:hidden p-2.5 text-white bg-indigo-600 hover:bg-indigo-550 rounded-full border border-indigo-400 shadow-lg animate-pulse cursor-pointer transition-all active:scale-95 flex items-center justify-center shrink-0"
+              title="تصفح الغرف والأعضاء 👥"
             >
               <Menu className="w-5 h-5" />
             </button>
           )}
 
-          <div className="relative flex items-center justify-center w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-500 via-purple-500 to-rose-500 shadow-lg shadow-indigo-500/25">
-            <span className="text-xl">💬</span>
-            <div className="absolute bottom-[-1px] right-[-1px] w-3 h-3 bg-emerald-400 border-2 border-[#120f26] rounded-full animate-pulse" />
-          </div>
-          <div>
-            <h1 className="text-base md:text-lg font-bold text-white tracking-wide">أنيس ماسنجر PWA</h1>
-            <p className="text-[10px] text-teal-300 font-medium tracking-normal">شات مستخدمين جماعي وخاص قابل للتنزيل كأيقونة 📱💻</p>
+          <div 
+            onClick={() => {
+              if (userProfile) {
+                setSelectedRoomId("");
+                setSelectedCompanion(null);
+              }
+            }}
+            className={`flex items-center gap-3 ${userProfile ? "cursor-pointer select-none hover:opacity-85 active:scale-98 transition" : ""}`}
+            title={userProfile ? "العودة للرئيسية ورادار الأعضاء 👁️" : undefined}
+          >
+            <div className="relative flex items-center justify-center w-10 h-10 rounded-full bg-[#1c1236] border-2 border-purple-500/50 shadow-lg shadow-purple-500/25 shrink-0">
+              {/* Rinnegan SVG logo of Madara Uchiha */}
+              <svg viewBox="0 0 100 100" className="w-9 h-9 select-none" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <circle cx="50" cy="50" r="45" fill="#58487a" />
+                <circle cx="50" cy="50" r="36" fill="none" stroke="#251a3d" strokeWidth="2.5" />
+                <circle cx="50" cy="50" r="27" fill="#695594" stroke="#251a3d" strokeWidth="2.5" />
+                <circle cx="50" cy="50" r="18" fill="none" stroke="#251a3d" strokeWidth="2.5" />
+                <circle cx="50" cy="50" r="10" fill="#140b22" />
+                <circle cx="50" cy="50" r="3" fill="#ffffff" opacity="0.6" />
+              </svg>
+              <div className="absolute bottom-[-1px] right-[-1px] w-3 h-3 bg-rose-500 border-2 border-[#120f26] rounded-full animate-pulse" />
+            </div>
+            <div className="text-right">
+              <h1 className="text-base md:text-lg font-bold text-white tracking-wide flex items-center gap-1.5">مادارا شات 👁️</h1>
+              <p className="text-[10px] text-teal-300 font-medium tracking-normal">دردشة وتواصل جماعي وفردي آمن - مشفر ومثبت بالكامل 📱💻</p>
+            </div>
           </div>
         </div>
 
@@ -594,19 +647,19 @@ export default function App() {
           <button
             id="pwa-header-install-btn"
             onClick={triggerNativeInstall}
-            className="flex items-center gap-1.5 px-3 py-1.5 md:py-2 text-[11px] md:text-xs font-bold text-slate-900 bg-gradient-to-r from-teal-300 to-emerald-400 hover:from-teal-200 hover:to-emerald-300 rounded-xl transition shadow-md shadow-teal-400/10 cursor-pointer"
+            className="p-2.5 text-slate-900 bg-gradient-to-r from-teal-300 to-emerald-400 hover:from-teal-200 hover:to-emerald-300 rounded-full transition shadow-md shadow-teal-400/20 cursor-pointer flex items-center justify-center shrink-0"
+            title="تثبيت التطبيق كأيقونة مستقلة للجوال والكمبيوتر 📥"
           >
-            <Download className="w-3.5 h-3.5" />
-            <span>ثبت الأيقونة 📥</span>
+            <Download className="w-4 h-4" />
           </button>
 
           <button
             id="help-guide-dialog-trigger"
             onClick={() => setShowInstallGuide(true)}
-            className="p-1.5 md:p-2 text-white/80 hover:text-white rounded-xl bg-white/5 border border-white/10"
+            className="p-2.5 text-white/80 hover:text-white rounded-full bg-white/5 border border-white/10 hover:bg-white/10 transition flex items-center justify-center shrink-0 cursor-pointer"
             title="طريقة تثبيت التطبيق"
           >
-            <HelpCircle className="w-4.5 h-4.5" />
+            <HelpCircle className="w-4 h-4" />
           </button>
         </div>
       </header>
@@ -719,6 +772,21 @@ export default function App() {
             ${mobileSidebarOpen ? "translate-x-0" : "translate-x-full md:translate-x-0"}
           `}>
             
+            {/* Mobile Close Bar at top of sidebar */}
+            <div className="md:hidden flex items-center justify-between p-3.5 bg-gradient-to-l from-indigo-950 to-slate-900 border-b border-white/10">
+              <span className="text-white text-xs font-bold flex items-center gap-1.5">
+                <Users className="w-4 h-4 text-indigo-400" />
+                <span>قائمة المحادثات والأنشطة 👥</span>
+              </span>
+              <button
+                id="sidebar-internal-close-btn"
+                onClick={() => setMobileSidebarOpen(false)}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white font-extrabold text-[11px] rounded-xl cursor-pointer shadow-md shadow-rose-600/20 active:scale-95 transition"
+              >
+                <span>إخفاء القائمة ✕</span>
+              </button>
+            </div>
+            
             {/* User Profile Summary Header */}
             <div className="p-4 border-b border-white/10 bg-white/[0.02] flex items-center justify-between">
               <div className="flex items-center gap-2.5">
@@ -807,39 +875,6 @@ export default function App() {
                 </span>
 
                 <div className="space-y-1 rounded-2xl bg-black/10 p-1.5 border border-white/5">
-                  {/* Default AI bot helper in direct messaging */}
-                  <button
-                    id="dm-anis-ai-bot-selector"
-                    onClick={() => {
-                      setSelectedCompanion({
-                        username: "أنيس (الذكاء الاصطناعي) 🤖",
-                        avatar: "🌸",
-                        color: "from-teal-400 to-emerald-400",
-                        lastSeen: Date.now()
-                      });
-                      setMobileSidebarOpen(false);
-                    }}
-                    className={`w-full text-right flex items-center gap-2.5 p-2 rounded-xl border transition ${
-                      selectedCompanion?.username === "أنيس (الذكاء الاصطناعي) 🤖"
-                        ? "bg-teal-500/20 border-teal-500/50 text-white"
-                        : "bg-transparent text-slate-300 hover:bg-white/5"
-                    }`}
-                  >
-                    <div className="relative shrink-0">
-                      <div className="w-8 h-8 rounded-lg bg-gradient-to-r from-teal-400 to-emerald-400 flex items-center justify-center text-sm">
-                        🌸
-                      </div>
-                      <div className="absolute bottom-[-1px] right-[-1px] w-2.5 h-2.5 bg-emerald-400 border border-[#171436] rounded-full" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex justify-between items-baseline">
-                        <span className="text-xs font-bold truncate">أنيس الذكاء الاصطناعي</span>
-                        <span className="text-[8px] bg-teal-500/20 text-teal-300 px-1 py-0.5 rounded">بوت ذكي</span>
-                      </div>
-                      <p className="text-[9px] text-slate-400 truncate">اسألني أي شيء خاص ومباشر ✨</p>
-                    </div>
-                  </button>
-
                   {/* List human users who sent heartbeats */}
                   {activeMembers
                     .filter((member) => member.username.trim() !== userProfile.username.trim())
@@ -931,8 +966,8 @@ export default function App() {
             <div className="p-4 border-t border-white/10 bg-white/[0.02]">
               <div className="flex items-center justify-between">
                 <div className="text-right">
-                  <p className="text-[10.5px] font-bold text-white">تطبيق أنيس ماسنجر</p>
-                  <p className="text-[9px] text-slate-400">تثبيت فوري كأيقونة للجوال 📱</p>
+                  <p className="text-[10.5px] font-bold text-white">تطبيق مادارا شات</p>
+                  <p className="text-[9px] text-slate-400">تثبيت فوري كأيقونة للجوال 👁️</p>
                 </div>
                 {/* Manual guide toggle */}
                 <button
@@ -950,66 +985,217 @@ export default function App() {
           {/* MAIN CHAT COMPONENT WINDOW (Messenger Experience) */}
           <section className="flex-1 flex flex-col bg-white/5 backdrop-blur-md border border-white/10 rounded-3xl overflow-hidden shadow-2xl relative">
             
-            {/* Header Area */}
-            <header className="px-4 md:px-6 py-4 border-b border-white/10 bg-white/[0.02] flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                {selectedCompanion ? (
-                  // Direct Chat Header
-                  <>
-                    <div className={`w-10 h-10 rounded-xl bg-gradient-to-r ${selectedCompanion.color} flex items-center justify-center text-lg shadow-lg`}>
-                      {selectedCompanion.avatar}
+            {!selectedCompanion && selectedRoomId === "" ? (
+              // HOMEPAGE DISPLAY (CONTACTS & RADAR EXPLORE DASHBOARD)
+              <div className="flex-grow flex flex-col overflow-y-auto p-4 md:p-6 text-right animate-fadeIn" dir="rtl">
+                {/* Banner */}
+                <div className="mb-6 p-5 md:p-6 rounded-3xl bg-gradient-to-l from-[#2c1b52]/50 via-[#1f0e43]/30 to-purple-950/25 border border-purple-500/20 shadow-xl relative overflow-hidden">
+                  <div className="absolute top-1/2 left-10 -translate-y-1/2 w-48 h-48 bg-purple-500/10 blur-[60px] rounded-full pointer-events-none" />
+                  
+                  <div className="absolute left-6 top-1/2 -translate-y-1/2 hidden sm:flex items-center justify-center w-20 h-20 rounded-full bg-[#140c26] border border-purple-500/30 shadow-lg shrink-0">
+                    <svg viewBox="0 0 100 100" className="w-16 h-16 animate-pulse select-none" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <circle cx="50" cy="50" r="45" fill="#58487a" />
+                      <circle cx="50" cy="50" r="36" fill="none" stroke="#251a3d" strokeWidth="2.5" />
+                      <circle cx="50" cy="50" r="27" fill="#695594" stroke="#251a3d" strokeWidth="2.5" />
+                      <circle cx="50" cy="50" r="18" fill="none" stroke="#251a3d" strokeWidth="2.5" />
+                      <circle cx="50" cy="50" r="10" fill="#140b22" />
+                      <circle cx="50" cy="50" r="3" fill="#ffffff" opacity="0.6" />
+                    </svg>
+                  </div>
+
+                  <h1 className="text-lg md:text-xl lg:text-2xl font-extrabold text-white mb-2 leading-tight">مرحباً بك في رادار مادارا شات! 👁️✨</h1>
+                  <p className="text-xs md:text-sm text-purple-200/80 leading-relaxed max-w-xl">
+                    تواصل مباشر وآمن وتشفير للمحادثات. يمكنك تصفح رادار المستخدمين النشطين بالأسفل وبدء دردشة خاصة آمنة فوراً بنقرة زر واحدة، أو تصفح القنوات العامة والغرف الجماعية من الركن الجانبي.
+                  </p>
+
+                  <div className="flex flex-wrap gap-2 mt-4">
+                    <button
+                      onClick={() => setMobileSidebarOpen(true)}
+                      className="md:hidden px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl shadow-md transition-all active:scale-95 flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Menu className="w-3.5 h-3.5" />
+                      <span>تصفح الغرف والقنوات 👥</span>
+                    </button>
+                    <button
+                      onClick={() => setSelectedRoomId("general")}
+                      className="px-4 py-2 bg-gradient-to-r from-teal-500/20 to-emerald-500/20 hover:from-teal-500/30 hover:to-emerald-500/30 border border-teal-500/30 hover:border-teal-500/50 text-teal-300 font-bold text-xs rounded-xl shadow-md transition-all active:scale-95 flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <span>المجلس العام للمناقشة 💬</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Available users grid list */}
+                <div className="flex-grow flex flex-col">
+                  <div className="flex items-center justify-between mb-4 pb-2 border-b border-white/5 flex-row-reverse">
+                    <div className="flex items-center gap-2 flex-row-reverse">
+                      <span className="relative flex h-2.5 w-2.5">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                      </span>
+                      <h2 className="text-sm md:text-base font-bold text-white">المستخدمون النشطون الآن في الرادار 👥</h2>
                     </div>
-                    <div>
-                      <h2 className="text-xs md:text-sm font-bold text-white flex items-center gap-1.5">
-                        <span>محادثة خاصة: {selectedCompanion.username}</span>
-                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                      </h2>
-                      <p className="text-[10px] text-slate-400">دردشة آمنة ومباشرة بين طرفين</p>
-                    </div>
-                  </>
-                ) : (
-                  // Public Room Header
-                  <>
-                    <div className="w-10 h-10 rounded-xl bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-lg">
-                      💬
-                    </div>
-                    <div>
-                      <h2 className="text-xs md:text-sm font-bold text-white">
-                        {rooms.find(r => r.id === selectedRoomId)?.name || "المجلس العام 💬"}
-                      </h2>
-                      <p className="text-[10px] text-slate-400">
-                        {rooms.find(r => r.id === selectedRoomId)?.description || "غرفة عامة للأعضاء والمستخدمين"}
+                    <p className="text-[10px] md:text-xs text-teal-300">انقر على مراسلة لبدء شات خاص آمن</p>
+                  </div>
+
+                  {activeMembers.filter(v => v.username !== userProfile.username).length === 0 ? (
+                    <div className="flex-grow flex flex-col items-center justify-center p-8 bg-white/[0.02] border border-white/5 rounded-3xl text-center space-y-4 my-4">
+                      <div className="w-16 h-16 rounded-full bg-purple-500/15 flex items-center justify-center text-3xl animate-pulse">
+                        📡
+                      </div>
+                      <p className="text-sm font-bold text-slate-200">لا يوجد غيرك متصل بالرادار بالوقت الحالي.</p>
+                      <p className="text-xs text-slate-400 max-w-sm leading-relaxed">
+                        قم بدعوة أصدقائك أو زملائك للتحدث والدخول على نفس الرابط ليظهروا معك فوراً وتجري محادثات ومكالمات آمنة!
                       </p>
+                      <button
+                        onClick={() => setShowInstallGuide(true)}
+                        className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-505 text-white font-extrabold text-xs rounded-xl shadow-md shadow-indigo-600/20 active:scale-95 transition-all cursor-pointer"
+                      >
+                        تعليمات التثبيت ومشاركة الرابط 📲
+                      </button>
                     </div>
-                  </>
-                )}
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {activeMembers
+                        .filter((member) => member.username.trim() !== userProfile.username.trim())
+                        .map((member) => (
+                          <div
+                            key={member.username}
+                            className="p-4 bg-white/[0.03] hover:bg-white/[0.06] border border-white/5 hover:border-purple-500/20 rounded-2xl transition duration-300 flex items-center justify-between gap-3 shadow-md group text-right"
+                            dir="rtl"
+                          >
+                            <div className="flex items-center gap-3">
+                              <div className="relative shrink-0">
+                                <div className={`w-11 h-11 rounded-xl bg-gradient-to-r ${member.color || "from-teal-400 to-emerald-500"} flex items-center justify-center text-xl shadow-lg`}>
+                                  {member.avatar || "👤"}
+                                </div>
+                                <span className="absolute -bottom-1 -left-1 flex h-2.5 w-2.5">
+                                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500 border border-[#120f26]"></span>
+                                </span>
+                              </div>
+                              <div className="text-right">
+                                <p className="text-xs md:text-sm font-bold text-white truncate max-w-[100px] sm:max-w-none">{member.username}</p>
+                                <p className="text-[9px] text-teal-400 mt-0.5">نشط وجاهز للدردشة 🟢</p>
+                              </div>
+                            </div>
+
+                            <div className="flex gap-1.5 shrink-0 flex-row-reverse">
+                              {/* Call Buttons */}
+                              <button
+                                onClick={() => startLiveCall(member.username, member.avatar, false)}
+                                className="p-2 bg-teal-500/10 hover:bg-teal-500/20 border border-teal-500/20 hover:border-teal-500/40 text-teal-300 rounded-xl transition cursor-pointer"
+                                title="اتصال صوتي ومكالمة سريعة 📞"
+                              >
+                                <Phone className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={() => startLiveCall(member.username, member.avatar, true)}
+                                className="p-2 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/25 hover:border-rose-500/40 text-rose-300 rounded-xl transition cursor-pointer"
+                                title="اتصال فيديو آمن 📹"
+                              >
+                                <Video className="w-3.5 h-3.5" />
+                              </button>
+                              {/* Start DM button */}
+                              <button
+                                onClick={() => {
+                                  setSelectedCompanion(member);
+                                  setSelectedRoomId("");
+                                }}
+                                className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-550 text-white font-bold text-[11px] rounded-xl transition cursor-pointer shadow shadow-indigo-600/30 active:scale-95"
+                              >
+                                مراسلة 💬
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                    </div>
+                  )}
+                </div>
               </div>
+            ) : (
+              // NORMAL CONVERSATIONAL WINDOW
+              <>
+                {/* Header Area */}
+                <header className="px-4 md:px-6 py-4 border-b border-white/10 bg-white/[0.02] flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    {selectedCompanion ? (
+                      // Direct Chat Header
+                      <>
+                        <div className={`w-10 h-10 rounded-xl bg-gradient-to-r ${selectedCompanion.color} flex items-center justify-center text-lg shadow-lg`}>
+                          {selectedCompanion.avatar}
+                        </div>
+                        <div>
+                          <h2 className="text-xs md:text-sm font-bold text-white flex items-center gap-1.5">
+                            <span>محادثة خاصة: {selectedCompanion.username}</span>
+                            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                          </h2>
+                          <p className="text-[10px] text-slate-400">دردشة آمنة ومباشرة بين طرفين</p>
+                        </div>
+                      </>
+                    ) : (
+                      // Public Room Header
+                      <>
+                        <div className="w-10 h-10 rounded-xl bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-lg">
+                          💬
+                        </div>
+                        <div>
+                          <h2 className="text-xs md:text-sm font-bold text-white">
+                            {rooms.find(r => r.id === selectedRoomId)?.name || "المجلس العام 💬"}
+                          </h2>
+                          <p className="text-[10px] text-slate-400">
+                            {rooms.find(r => r.id === selectedRoomId)?.description || "غرفة عامة للأعضاء والمستخدمين"}
+                          </p>
+                        </div>
+                      </>
+                    )}
+                  </div>
 
               {/* Chat Header Actions */}
               <div className="flex items-center gap-2">
+                
+                {/* Compact Expressive Voice Call (Audio-only) Icon Button */}
+                <button
+                  id="start-header-audio-only-call-btn"
+                  onClick={() => {
+                    const companionName = selectedCompanion ? selectedCompanion.username : (rooms.find(r => r.id === selectedRoomId)?.name || "الغرفة العامة");
+                    const companionAvatar = selectedCompanion ? selectedCompanion.avatar : "💬";
+                    startLiveCall(companionName, companionAvatar, false);
+                  }}
+                  className="p-2.5 text-white bg-teal-600 hover:bg-teal-550 rounded-full transition shadow-lg shadow-teal-600/30 flex items-center justify-center cursor-pointer relative"
+                  title="اتصال صوتي آمن ومباشر 📞"
+                >
+                  <Phone className="w-4 h-4" />
+                  <span className="absolute -top-1 -left-1 flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-teal-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-teal-500"></span>
+                  </span>
+                </button>
+
+                {/* Compact Expressive Video Call Icon Button */}
                 <button
                   id="start-header-voice-call-btn"
                   onClick={() => {
                     const companionName = selectedCompanion ? selectedCompanion.username : (rooms.find(r => r.id === selectedRoomId)?.name || "الغرفة العامة");
                     const companionAvatar = selectedCompanion ? selectedCompanion.avatar : "💬";
-                    startLiveCall(companionName, companionAvatar);
+                    startLiveCall(companionName, companionAvatar, true);
                   }}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-[11.5px] font-bold text-white bg-[#e11d48] hover:bg-[#f43f5e] rounded-xl transition shadow-md shadow-rose-600/20 cursor-pointer animate-pulse"
-                  title="بدء شات صوت وصورة"
+                  className="p-2.5 text-white bg-rose-600 hover:bg-rose-500 rounded-full transition shadow-lg shadow-rose-600/30 flex items-center justify-center cursor-pointer relative"
+                  title="اتصال فيديو آمن ومباشر 📹"
                 >
                   <Video className="w-4 h-4" />
-                  <span>اتصال صوت وصورة 📞</span>
                 </button>
 
                 <span className="hidden lg:inline-block text-[10px] text-teal-400 bg-teal-500/10 border border-teal-500/20 px-2.5 py-1 rounded-full font-bold">
-                  تحديث تلقائي مستمر 🟢
+                  تحديث نشط 🟢
                 </span>
                 
                 {mobileSidebarOpen ? (
                   <button
                     id="mobile-close-sidebar-btn"
                     onClick={() => setMobileSidebarOpen(false)}
-                    className="p-1.5 bg-white/5 border border-white/10 rounded-xl text-white"
+                    className="p-2 bg-rose-600/20 border border-rose-500/30 rounded-full text-rose-300 hover:bg-rose-600/30 hover:text-white flex items-center justify-center transition cursor-pointer"
+                    title="إغلاق قائمة الغرف والأعضاء ✕"
                   >
                     <X className="w-4 h-4" />
                   </button>
@@ -1017,9 +1203,14 @@ export default function App() {
                   <button
                     id="mobile-open-sidebar-btn"
                     onClick={() => setMobileSidebarOpen(true)}
-                    className="md:hidden p-1.5 bg-white/5 border border-white/10 rounded-xl text-white"
+                    className="md:hidden p-2.5 bg-indigo-600/90 border border-indigo-500 rounded-full text-white hover:bg-indigo-500 transition flex items-center justify-center cursor-pointer relative animate-pulse"
+                    title="عرض قائمة الغرف والأعضاء 👥"
                   >
-                    <Users className="w-4 h-4" />
+                    <Users className="w-4 h-4 text-teal-300" />
+                    <span className="absolute -top-0.5 -left-0.5 flex h-2 w-2">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-teal-400 opacity-75 animate-bounce"></span>
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-teal-300"></span>
+                    </span>
                   </button>
                 )}
               </div>
@@ -1028,13 +1219,64 @@ export default function App() {
             {/* MESSAGE HISTORY SCROLLER */}
             <div ref={chatContainerRef} className="flex-grow overflow-y-auto p-4 md:p-6 space-y-4">
               
+              {/* Active Contacts Presence Dashboard */}
+              {!selectedCompanion && selectedRoomId === "general" && (
+                <div className="bg-gradient-to-r from-purple-950/40 to-indigo-950/40 border border-purple-500/20 rounded-2xl p-4 mb-4 select-none animate-fadeIn text-right" dir="rtl">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-1.5 flex-row-reverse">
+                      <span className="relative flex h-2 w-2">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                      </span>
+                      <h3 className="text-xs md:text-sm font-bold text-white">الأعضاء والمستخدمون المتصلون بالرادار الآن 👥</h3>
+                    </div>
+                    <span className="text-[10px] text-teal-300">انقر لبدء محادثة خاصة فورية 👁️</span>
+                  </div>
+                  
+                  <div className="flex gap-3 overflow-x-auto pb-1.5 scrollbar-thin scrollbar-thumb-white/10 text-center flex-row-reverse justify-start">
+                    {activeMembers.filter(v => v.username !== userProfile.username).length === 0 ? (
+                      <div className="text-right w-full py-1">
+                        <p className="text-[11px] text-slate-300">لا يوجد غيرك متصل الآن بالرادار بالوقت الحالي.</p>
+                        <p className="text-[9.5px] text-indigo-300 underline mt-0.5 cursor-pointer" onClick={() => setShowInstallGuide(true)}>
+                          شارك رابط التطبيق مع أصدقائك ليتصلوا فوراً! 📱📤
+                        </p>
+                      </div>
+                    ) : (
+                      activeMembers
+                        .filter((u) => u.username.trim() !== userProfile?.username?.trim())
+                        .map((user) => (
+                          <button
+                            key={user.username}
+                            onClick={() => {
+                              setSelectedCompanion(user);
+                              setMobileSidebarOpen(false);
+                            }}
+                            className="flex flex-col items-center gap-1.5 p-2 rounded-xl hover:bg-white/5 transition border border-transparent hover:border-white/5 shrink-0 min-w-[70px] cursor-pointer"
+                          >
+                            <div className="relative">
+                              <div className={`w-11 h-11 rounded-xl bg-gradient-to-r ${user.color || "from-teal-400 to-emerald-500"} flex items-center justify-center text-lg shadow-md`}>
+                                {user.avatar || "👤"}
+                              </div>
+                              <span className="absolute -bottom-0.5 -left-0.5 flex h-2.5 w-2.5">
+                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500 border border-[#1b153b]"></span>
+                              </span>
+                            </div>
+                            <span className="text-[10px] text-slate-200 font-bold max-w-[65px] truncate">{user.username}</span>
+                          </button>
+                        ))
+                    )}
+                  </div>
+                </div>
+              )}
+
               {/* Informative notification if they are alone with help option */}
               {messages.length === 0 && (
                 <div className="p-4 bg-white/5 border border-white/10 rounded-2xl text-center max-w-md mx-auto my-6 space-y-2">
                   <span className="text-2xl block">💬</span>
                   <p className="text-xs font-bold text-white">سجل الدردشة فارغ هنا</p>
                   <p className="text-[10px] text-slate-300 leading-relaxed">
-                    كن أول من يكتب رسالة في هذا الحقل، أو تواصل مع صديق من المتصلين على اليمين! يمكنك أيضاً كتابة <strong className="text-teal-300 bg-white/5 p-1 rounded">@أنيس</strong> وتجربة رد الذكاء الاصطناعي الفوري هنا.
+                    كن أول من يكتب رسالة في هذا الحقل، أو تواصل مع صديق من المتصلين بالرادار لبدء دردشة فورية!
                   </p>
                 </div>
               )}
@@ -1085,9 +1327,30 @@ export default function App() {
                         {msg.content}
                       </p>
                       
-                      <span className="text-[8px] opacity-60 font-mono block mt-1.5 text-left">
-                        {msg.timestamp || "اليوم"}
-                      </span>
+                      <div className="flex items-center justify-between gap-2.5 mt-1.5 text-[8.5px] opacity-80 select-none">
+                        <span className="opacity-70 font-mono text-[8px]">{msg.timestamp || "اليوم"}</span>
+                        
+                        {isMyMessage && (
+                          <div className="flex items-center gap-1 font-sans">
+                            {msg.readBy && msg.readBy.filter((u: string) => u.toLowerCase() !== userProfile?.username?.trim().toLowerCase()).length > 0 ? (
+                              <span className="text-cyan-300 font-bold flex items-center gap-0.5" title="قُرئت من طرف الصديق">
+                                <span>قُرئت</span>
+                                <span className="text-[9px] leading-none">✓✓</span>
+                              </span>
+                            ) : (activeMembers.length > 1 ? (
+                              <span className="text-slate-200 opacity-95 flex items-center gap-0.5" title="وصلت لجهاز الصديق">
+                                <span>وصلت</span>
+                                <span className="text-[9px] leading-none">✓✓</span>
+                              </span>
+                            ) : (
+                              <span className="text-slate-400 opacity-60 flex items-center gap-0.5" title="أرسلت بأمان">
+                                <span>أرسلت</span>
+                                <span className="text-[9px] leading-none">✓</span>
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
 
                       {/* Clickable Quick Reply on hover */}
                       <button
@@ -1119,6 +1382,28 @@ export default function App() {
                 </div>
               )}
 
+              {/* Symmetrical Typing Indicator element */}
+              {typingUsers.length > 0 && (
+                <div className="flex flex-col items-start w-full animate-fadeIn select-none mb-2 text-right">
+                  <div className="flex items-center gap-1.5 mb-1 justify-start flex-row">
+                    <div className="w-5 h-5 rounded-lg bg-teal-500/15 flex items-center justify-center text-[10px]">
+                      ✍️
+                    </div>
+                    <span className="text-[10px] text-teal-300 font-bold">
+                      {typingUsers.map(u => u.username).join(" و ")}
+                    </span>
+                  </div>
+                  <div className="rounded-2xl px-3 py-2 bg-teal-500/10 backdrop-blur-md border border-teal-500/20 text-teal-200 rounded-bl-none flex items-center gap-2">
+                    <span className="text-[10px] md:text-xs">يكتب الآن...</span>
+                    <div className="flex gap-0.5 items-center pt-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-bounce delay-100"></span>
+                      <span className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-bounce delay-205"></span>
+                      <span className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-bounce delay-300"></span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Scroll anchor reference */}
               <div ref={messageEndRef} />
             </div>
@@ -1126,10 +1411,10 @@ export default function App() {
             {/* Quick pre-set messaging options in header bottom helper */}
             <div className="px-4 py-2 border-t border-white/5 bg-white/[0.01] flex flex-wrap gap-1 md:gap-1.5 items-center">
               <span className="text-[10px] font-bold text-indigo-300">عبارات سريعة:</span>
-              <button onClick={() => insertQuickText("السلام عليكم ورحمة الله وبركاته 🌹")} className="text-[9.5px] bg-white/5 hover:bg-white/10 border border-white/10 rounded-full px-2.5 py-0.5 text-slate-300 hover:text-white transition">السلام عليكم</button>
-              <button onClick={() => insertQuickText("أهلاً بالجميع، كيف الحال اليوم؟ 👋")} className="text-[9.5px] bg-white/5 hover:bg-white/10 border border-white/10 rounded-full px-2.5 py-0.5 text-slate-300 hover:text-white transition">كيف الحال</button>
-              <button onClick={() => insertQuickText("جربوا تثبيت واجهة التطبيق كأيقونة على الجوال! 📱")} className="text-[9.5px] bg-teal-500/10 hover:bg-teal-500/20 text-teal-300 border border-teal-500/20 rounded-full px-2.5 py-0.5 transition">تطبيق PWA</button>
-              <button onClick={() => insertQuickText("@أنيس ساعدني في تحسن كتابتي العربية ✨")} className="text-[9.5px] bg-purple-500/10 hover:bg-purple-500/20 text-purple-300 border border-purple-500/20 rounded-full px-2.5 py-0.5 transition font-bold">@أنيس (سؤال ذكي)</button>
+              <button type="button" onClick={() => insertQuickText("السلام عليكم ورحمة الله وبركاته 🌹")} className="text-[9.5px] bg-white/5 hover:bg-white/10 border border-white/10 rounded-full px-2.5 py-0.5 text-slate-300 hover:text-white transition">السلام عليكم</button>
+              <button type="button" onClick={() => insertQuickText("أهلاً بالجميع، كيف الحال اليوم؟ 👋")} className="text-[9.5px] bg-white/5 hover:bg-white/10 border border-white/10 rounded-full px-2.5 py-0.5 text-slate-300 hover:text-white transition">كيف الحال</button>
+              <button type="button" onClick={() => insertQuickText("جربوا تثبيت واجهة التطبيق كأيقونة على الجوال! 📱")} className="text-[9.5px] bg-teal-500/10 hover:bg-teal-500/20 text-teal-300 border border-teal-500/20 rounded-full px-2.5 py-0.5 transition">تطبيق PWA</button>
+              <button type="button" onClick={() => insertQuickText("أنا متصل الآن بالرادار بالكامل! 👁️")} className="text-[9.5px] bg-purple-500/10 hover:bg-purple-500/20 text-purple-300 border border-purple-500/20 rounded-full px-2.5 py-0.5 transition font-bold">متصل بالرادار 🟢</button>
             </div>
 
             {/* KEY MESSAGE INPUT CONTAINER ACCORDING TO MOCKUP */}
@@ -1174,11 +1459,11 @@ export default function App() {
                   id="user-typed-message-box"
                   type="text"
                   value={inputValue}
-                  onChange={(e) => setInputValue(e.target.value)}
+                  onChange={(e) => handleInputChange(e.target.value)}
                   placeholder={
                     selectedCompanion 
                       ? `اكتب رسالة خاصة لـ ${selectedCompanion.username}...`
-                      : `@أنيس استدعاء لرد الذكاء الاصطناعي، أو دردشة مع الغرفة...`
+                      : `اكتب رسالة شات للمجموعة...`
                   }
                   className="flex-grow bg-transparent border-none focus:ring-0 focus:outline-none text-white placeholder-white/40 text-xs md:text-sm py-2 px-1 text-right"
                   dir="rtl"
@@ -1196,8 +1481,10 @@ export default function App() {
                 </button>
               </form>
             </footer>
+          </>
+        )}
 
-          </section>
+      </section>
 
         </div>
       )}
@@ -1412,41 +1699,69 @@ export default function App() {
         </div>
       )}
 
-      {/* GLOBAL FOOTER */}
-      <footer className="w-full text-center py-3 bg-[#0a0c1a] border-t border-white/5 opacity-85 mt-auto text-[9.5px] text-slate-400 flex flex-col md:flex-row justify-center items-center gap-1 md:gap-3">
-        <p>صنع بكل حب كـ تطبيق ويب تقدمي (PWA) للكمبيوتر والهاتف 🌸</p>
-        <span className="hidden md:inline">|</span>
-        <p>التحديثات فورية ومباشرة من خلال مخازن الحفظ اللحظية ������</p>
-      </footer>
+      {/* GLOBAL FOOTER REMOVED */}
 
       {/* VOICE & VIDEO RTC CALL MODAL LAYER */}
       {activeCall && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-xl animate-fadeIn text-center">
-          <div className="w-full max-w-2xl bg-slate-900 border border-white/10 rounded-3xl p-6 relative shadow-2xl flex flex-col min-h-[480px]">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 md:p-4 bg-black/90 backdrop-blur-xl animate-fadeIn text-center">
+          <div className="w-full max-w-2xl h-[92dvh] md:h-auto md:min-h-[500px] bg-slate-900 border border-white/10 rounded-3xl p-4 md:p-6 relative shadow-2xl flex flex-col justify-between">
             
             {/* Call Header */}
-            <div className="flex justify-between items-center border-b border-white/5 pb-3 mb-4 text-right">
-              <div className="flex items-center gap-3 font-sans" dir="rtl">
-                <div className="w-10 h-10 rounded-xl bg-rose-500/10 border border-rose-500/30 flex items-center justify-center text-lg animate-pulse">
+            <div className="flex justify-between items-center border-b border-white/5 pb-3 text-right">
+              <div className="flex items-center gap-2.5 font-sans" dir="rtl">
+                <div className="w-9 h-9 rounded-xl bg-rose-500/10 border border-rose-500/30 flex items-center justify-center text-md animate-pulse">
                   📞
                 </div>
                 <div className="text-right">
-                  <h3 className="text-sm font-bold text-white">اتصال صوت وصورة آمن ومباشر 🔒</h3>
-                  <p className="text-[10px] text-teal-300 mt-0.5">
+                  <h3 className="text-xs md:text-sm font-bold text-white">اتصال صوت وصورة آمن ومباشر 🔒</h3>
+                  <p className="text-[9.5px] text-teal-300 mt-0.5">
                     {activeCall.isConnected ? "المكالمة متصلة ونشطة الآن 🟢" : "جاري الاتصال والربط عبر السيرفر... ⏳"}
                   </p>
                 </div>
               </div>
-              <div className="flex items-center gap-1 bg-white/5 px-2.5 py-1 rounded-lg text-[10px] text-slate-400 font-mono">
-                <span>HD Audio/Video Loopback</span>
+              <div className="flex items-center gap-1 bg-white/5 px-2 py-0.5 rounded-lg text-[9px] text-slate-400 font-mono">
+                <span>RTC Loopback</span>
               </div>
             </div>
 
-            {/* Video Streams Container */}
-            <div className="flex-grow grid grid-cols-1 md:grid-cols-2 gap-4 my-2 relative">
+            {/* Immersive Video Streams Container - Mobile Friendly overlay style */}
+            <div className="flex-grow my-4 relative bg-slate-950 rounded-2xl overflow-hidden border border-white/15 min-h-[220px] md:min-h-[340px] flex items-center justify-center">
               
-              {/* Local Participant Frame */}
-              <div className="bg-black/40 rounded-2xl border border-white/10 overflow-hidden relative min-h-[180px] flex items-center justify-center">
+              {/* REMOTE PARTICIPANT: Full scale main video block */}
+              {activeCall.isConnected ? (
+                (activeCall.isVideoEnabled ? (
+                  <video
+                    id="remote-stream-player"
+                    ref={remoteVideoRef}
+                    autoPlay
+                    playsInline
+                    className="w-full h-full object-cover absolute inset-0 z-0"
+                  />
+                ) : (
+                  <div className="flex flex-col items-center gap-2 relative z-10">
+                    <div className="w-16 h-16 rounded-full bg-indigo-500/25 flex items-center justify-center text-xl text-white font-bold border border-indigo-400/30">
+                      {activeCall.companionAvatar}
+                    </div>
+                    <span className="text-xs text-slate-300">تواصل صوتي جارٍ</span>
+                  </div>
+                ))
+              ) : (
+                <div className="flex flex-col items-center justify-center gap-4 text-center p-4 relative z-10">
+                  <div className="relative">
+                    <div className="w-14 h-14 rounded-full bg-rose-500/10 border-2 border-rose-500 flex items-center justify-center text-xl animate-ping absolute" />
+                    <div className="w-14 h-14 rounded-full bg-slate-800 border border-white/10 flex items-center justify-center text-xl relative z-10">
+                      {activeCall.companionAvatar}
+                    </div>
+                  </div>
+                  <div>
+                    <p className="text-xs font-bold text-white">جاري رنان الخط لـ {activeCall.companionName}...</p>
+                    <p className="text-[10px] text-slate-400 mt-1">بانتظار قبول الاتصال من الطرف الآخر</p>
+                  </div>
+                </div>
+              )}
+
+              {/* LOCAL CLIENT PREVIEW: Small floating picture-in-picture window */}
+              <div className="absolute top-3 left-3 w-24 h-36 md:w-32 md:h-48 rounded-xl border border-white/20 shadow-2xl overflow-hidden z-20 bg-slate-900/95 flex items-center justify-center">
                 {activeCall.isVideoEnabled ? (
                   <video
                     id="local-stream-player"
@@ -1454,72 +1769,38 @@ export default function App() {
                     autoPlay
                     playsInline
                     muted
-                    className="w-full h-full object-cover rounded-2xl transform scale-x-[-1]"
+                    className="w-full h-full object-cover transform scale-x-[-1]"
                   />
                 ) : (
-                  <div className="flex flex-col items-center gap-2">
-                    <div className="w-14 h-14 rounded-full bg-slate-800 flex items-center justify-center text-xl text-white font-bold border border-white/10">
+                  <div className="flex flex-col items-center gap-1.5 p-1 text-center">
+                    <div className="w-10 h-10 rounded-full bg-slate-800 flex items-center justify-center text-sm border border-white/10">
                       {userProfile?.avatar || "👤"}
                     </div>
-                    <span className="text-[10px] text-slate-400">كاميراتك مغلقة</span>
+                    <span className="text-[9px] text-slate-400 scale-90">كاميراتك مغلقة</span>
                   </div>
                 )}
-                <div className="absolute bottom-2 right-2 bg-black/60 px-2 py-0.5 rounded-lg text-[9px] text-teal-400 font-bold">
-                  أنت (محلي) 🟢
+                <div className="absolute bottom-1.5 right-1.5 bg-black/60 px-1.5 py-0.5 rounded-md text-[8px] text-teal-400 font-bold">
+                  أنت 🟢
                 </div>
               </div>
 
-              {/* Remote Participant Frame */}
-              <div className="bg-black/40 rounded-2xl border border-white/10 overflow-hidden relative min-h-[180px] flex items-center justify-center">
-                {activeCall.isConnected ? (
-                  (activeCall.isVideoEnabled ? (
-                    <video
-                      id="remote-stream-player"
-                      ref={remoteVideoRef}
-                      autoPlay
-                      playsInline
-                      className="w-full h-full object-cover rounded-2xl"
-                    />
-                  ) : (
-                    <div className="flex flex-col items-center gap-2">
-                      <div className="w-14 h-14 rounded-full bg-indigo-500/25 flex items-center justify-center text-xl text-white font-bold border border-indigo-400/30">
-                        {activeCall.companionAvatar}
-                      </div>
-                      <span className="text-[10px] text-slate-400">تواصل صوتي جارٍ</span>
-                    </div>
-                  ))
-                ) : (
-                  <div className="flex flex-col items-center justify-center gap-4 text-center">
-                    <div className="relative">
-                      <div className="w-16 h-16 rounded-full bg-rose-500/10 border-2 border-rose-500 flex items-center justify-center text-2xl animate-ping absolute" />
-                      <div className="w-16 h-16 rounded-full bg-slate-800 border border-white/10 flex items-center justify-center text-2xl relative z-10">
-                        {activeCall.companionAvatar}
-                      </div>
-                    </div>
-                    <div>
-                      <p className="text-xs font-bold text-white">جاري رنان الخط لـ {activeCall.companionName}...</p>
-                      <p className="text-[9px] text-slate-400 mt-1">بانتظار قبول الاتصال من الطرف الآخر</p>
-                    </div>
-                  </div>
-                )}
-                
-                <div className="absolute bottom-2 right-2 bg-black/60 px-2 py-0.5 rounded-lg text-[9px] text-indigo-300 font-bold">
-                  {activeCall.companionName} {activeCall.isConnected ? "🟢" : "⏳"}
-                </div>
+              {/* Absolute corner badge showing remote active status */}
+              <div className="absolute bottom-3 right-3 bg-black/70 backdrop-blur-md px-2.5 py-1 rounded-xl text-[10px] text-indigo-200 font-bold z-10 flex items-center gap-1">
+                <span>{activeCall.companionName}</span>
+                <span className="animate-pulse">{activeCall.isConnected ? "🟢" : "⏳"}</span>
               </div>
-
             </div>
 
-            {/* Calling Control buttons group */}
-            <div className="flex justify-center items-center gap-3 mt-6 border-t border-white/5 pt-4">
+            {/* Calling Control buttons group - Large Touch Targets */}
+            <div className="flex justify-center items-center gap-4 border-t border-white/5 pt-3">
               
               {/* Mic toggle */}
               <button
                 id="call-mic-toggle-btn"
                 onClick={toggleAudioInCall}
-                className={`w-12 h-12 rounded-full flex items-center justify-center transition-all ${
+                className={`w-11 h-11 md:w-12 md:h-12 rounded-full flex items-center justify-center transition-all ${
                   activeCall.isAudioEnabled 
-                    ? "bg-slate-800 text-white hover:bg-slate-700 hover:scale-105 active:scale-95 cursor-pointer" 
+                    ? "bg-slate-800 text-white hover:bg-slate-700 hover:scale-105 active:scale-95 cursor-pointer border border-white/10" 
                     : "bg-rose-600 text-white hover:bg-rose-500 animate-pulse cursor-pointer"
                 }`}
                 title={activeCall.isAudioEnabled ? "كتم الصوت" : "تشغيل الصوت"}
@@ -1531,17 +1812,17 @@ export default function App() {
               <button
                 id="call-hangup-btn"
                 onClick={endLiveCall}
-                className="w-14 h-14 bg-rose-500 hover:bg-rose-600 text-white rounded-full flex items-center justify-center transition-transform hover:scale-105 active:scale-95 shadow-lg shadow-rose-500/30 cursor-pointer"
+                className="w-12 h-12 md:w-14 md:h-14 bg-rose-500 hover:bg-rose-600 text-white rounded-full flex items-center justify-center transition-transform hover:scale-110 active:scale-90 shadow-lg shadow-rose-500/30 cursor-pointer"
                 title="إنهاء المكالمة"
               >
-                <PhoneOff className="w-6 h-6" />
+                <PhoneOff className="w-5 h-5 md:w-6 md:h-6" />
               </button>
 
               {/* Video toggle */}
               <button
                 id="call-video-toggle-btn"
                 onClick={toggleVideoInCall}
-                className={`w-12 h-12 rounded-full flex items-center justify-center transition-all ${
+                className={`w-11 h-11 md:w-12 md:h-12 rounded-full flex items-center justify-center transition-all ${
                   activeCall.isVideoEnabled 
                     ? "bg-slate-800 text-white hover:bg-slate-700 hover:scale-105 active:scale-95 cursor-pointer" 
                     : "bg-rose-600 text-white hover:bg-rose-500 animate-pulse cursor-pointer"
@@ -1554,7 +1835,7 @@ export default function App() {
             </div>
 
             {/* Privacy note */}
-            <p className="text-[9.5px] text-slate-500 mt-4 leading-relaxed font-sans" dir="rtl">
+            <p className="text-[9px] text-slate-500 mt-3 leading-relaxed font-sans" dir="rtl">
               * تم تشفير الاتصال محلياً من طرف إلى طرف. يتطلب التطبيق إذن الكاميرا والميكروفون من متصفحك للعمل بشكل صحيح وتحسين أداء الـ WebRTC.
             </p>
 
