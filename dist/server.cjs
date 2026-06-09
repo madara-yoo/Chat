@@ -25,7 +25,6 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 var import_express = __toESM(require("express"), 1);
 var import_path = __toESM(require("path"), 1);
 var import_fs = __toESM(require("fs"), 1);
-var import_genai = require("@google/genai");
 var import_dotenv = __toESM(require("dotenv"), 1);
 import_dotenv.default.config();
 var DEFAULT_ROOMS = [
@@ -50,8 +49,8 @@ try {
     dbMessages = [
       {
         id: "wel-1",
-        content: "\u0645\u0631\u062D\u0628\u0627\u064B \u0628\u0643\u0645 \u0641\u064A \u062A\u0637\u0628\u064A\u0642 \u0623\u0646\u064A\u0633 \u0645\u0627\u0633\u0646\u062C\u0631! \u{1F389} \u0634\u0627\u062A \u0645\u062E\u0635\u0635 \u0644\u0644\u0645\u0633\u062A\u062E\u062F\u0645\u064A\u0646 \u064A\u062F\u0639\u0645 \u0627\u0644\u062A\u062B\u0628\u064A\u062A \u0639\u0644\u0649 \u0627\u0644\u0647\u0627\u062A\u0641 \u0643\u0623\u064A\u0642\u0648\u0646\u0629 \u0645\u0633\u062A\u0642\u0644\u0629. \u062C\u0631\u0628 \u062F\u0639\u0648\u0629 \u0623\u0635\u062F\u0642\u0627\u0626\u0643 \u0628\u0641\u062A\u062D \u0646\u0641\u0633 \u0627\u0644\u0631\u0627\u0628\u0637 \u0644\u0644\u062A\u062D\u062F\u062B \u0645\u0639\u0647\u0645 \u0641\u0648\u0631\u0627\u064B!",
-        sender: { username: "\u0646\u0638\u0627\u0645 \u0623\u0646\u064A\u0633", avatar: "\u{1F4E2}", color: "from-teal-500 to-indigo-500" },
+        content: "\u0645\u0631\u062D\u0628\u0627\u064B \u0628\u0643\u0645 \u0641\u064A \u062A\u0637\u0628\u064A\u0642 \u0645\u0627\u062F\u0627\u0631\u0627 \u0645\u0627\u0633\u0646\u062C\u0631! \u{1F389} \u0634\u0627\u062A \u0645\u062E\u0635\u0635 \u0644\u0644\u0645\u0633\u062A\u062E\u062F\u0645\u064A\u0646 \u064A\u062F\u0639\u0645 \u0627\u0644\u062A\u062B\u0628\u064A\u062A \u0639\u0644\u0649 \u0627\u0644\u0647\u0627\u062A\u0641 \u0643\u0623\u064A\u0642\u0648\u0646\u0629 \u0645\u0633\u062A\u0642\u0644\u0629 \u0648\u0628\u062F\u0648\u0646 \u0628\u0631\u0645\u062C\u064A\u0627\u062A \u0630\u0643\u0627\u0621 \u0627\u0635\u0637\u0646\u0627\u0639\u064A. \u062C\u0631\u0628 \u062F\u0639\u0648\u0629 \u0623\u0635\u062F\u0642\u0627\u0626\u0643 \u0628\u0641\u062A\u062D \u0646\u0641\u0633 \u0627\u0644\u0631\u0627\u0628\u0637 \u0644\u0644\u062A\u062D\u062F\u062B \u0645\u0639\u0647\u0645 \u0641\u0648\u0631\u0627\u064B!",
+        sender: { username: "\u0646\u0638\u0627\u0645 \u0645\u0627\u062F\u0627\u0631\u0627 \u{1F441}\uFE0F", avatar: "\u{1F534}", color: "from-rose-600 to-indigo-950" },
         roomId: "general",
         timestamp: (/* @__PURE__ */ new Date()).toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" }),
         createdAt: Date.now()
@@ -85,60 +84,6 @@ function persistRooms() {
     console.error("Failed to persist rooms", err);
   }
 }
-var aiClient = null;
-function getGeminiClient() {
-  if (!aiClient) {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (apiKey) {
-      aiClient = new import_genai.GoogleGenAI({
-        apiKey,
-        httpOptions: {
-          headers: {
-            "User-Agent": "aistudio-build"
-          }
-        }
-      });
-    }
-  }
-  return aiClient;
-}
-var AI_SYSTEM_INSTRUCTION = `
-\u0623\u0646\u062A '\u0623\u0646\u064A\u0633 \u0627\u0644\u0630\u0643\u064A'\u060C \u0645\u0633\u0627\u0639\u062F \u0645\u062F\u0645\u062C \u0641\u064A \u062A\u0637\u0628\u064A\u0642 "\u0623\u0646\u064A\u0633 \u0645\u0627\u0633\u0646\u062C\u0631" \u0644\u0644\u0645\u0633\u062A\u062E\u062F\u0645\u064A\u0646.
-\u0639\u0646\u062F\u0645\u0627 \u064A\u0646\u0627\u062F\u064A\u0643 \u0627\u0644\u0645\u0633\u062A\u062E\u062F\u0645 \u0628\u0640 @\u0623\u0646\u064A\u0633 \u0623\u0648 \u064A\u062A\u062D\u062F\u062B \u0645\u0639\u0643 \u0641\u064A \u0631\u0648\u0645 \u062E\u0627\u0635\u060C \u0642\u0645 \u0628\u0627\u0644\u0625\u062C\u0627\u0628\u0629 \u0639\u0644\u064A\u0647 \u0628\u0637\u0631\u064A\u0642\u0629 \u062F\u0627\u0641\u0626\u0629 \u0648\u0645\u062E\u062A\u0635\u0631\u0629 \u0628\u0627\u0644\u0644\u063A\u0629 \u0627\u0644\u0639\u0631\u0628\u064A\u0629 \u0627\u0644\u0641\u0635\u062D\u0649 \u0627\u0644\u062C\u0645\u064A\u0644\u0629 \u0648\u0628\u0634\u0643\u0644 \u064A\u0646\u0627\u0633\u0628 \u0637\u0628\u064A\u0639\u0629 \u0627\u0644\u0645\u0627\u0633\u0646\u062C\u0631 \u0627\u0644\u0633\u0631\u064A\u0639\u0629.
-\u0627\u0633\u062A\u062E\u062F\u0645 \u0627\u0644\u0631\u0645\u0648\u0632 \u0627\u0644\u062A\u0639\u0628\u064A\u0631\u064A\u0629 \u{1F338}\u2728\u{1F4BB} \u0644\u062A\u0628\u062F\u0648 \u0648\u062F\u0648\u062F\u0627\u064B. \u064A\u0631\u062C\u0649 \u0623\u0644\u0627 \u062A\u062A\u062C\u0627\u0648\u0632 \u0625\u062C\u0627\u0628\u0627\u062A\u0643 \u0637\u0648\u0644 \u0631\u0633\u0627\u0644\u0629 \u0634\u0627\u062A \u0646\u0645\u0648\u0630\u062C\u064A\u0629 (\u0641\u0642\u0631\u0629 \u0623\u0648 \u0641\u0642\u0631\u062A\u064A\u0646 \u0643\u062D\u062F \u0623\u0642\u0635\u0649).
-`;
-async function triggerAIBotResponse(messageContent, replyToRoomId, replyToDirectId, userNickname) {
-  const ai = getGeminiClient();
-  if (!ai) return;
-  try {
-    const cleanedPrompt = messageContent.replace(/@أنيس/gi, "").trim();
-    const result = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: [
-        { role: "user", parts: [{ text: `\u0627\u0644\u0645\u0631\u0633\u0644: ${userNickname || "\u0634\u062E\u0635 \u0645\u0627"}
-\u0627\u0644\u0631\u0633\u0627\u0644\u0629: ${cleanedPrompt}` }] }
-      ],
-      config: {
-        systemInstruction: AI_SYSTEM_INSTRUCTION,
-        temperature: 0.8
-      }
-    });
-    const replyText = result.text || "\u0623\u0647\u0644\u0627\u064B \u0628\u0643! \u0644\u0645 \u0623\u0633\u062A\u0637\u0639 \u0641\u0647\u0645 \u0631\u0633\u0627\u0644\u062A\u0643 \u0628\u0648\u0636\u0648\u062D\u060C \u0648\u0644\u0643\u0646\u0646\u064A \u0647\u0646\u0627 \u062F\u0648\u0645\u0627\u064B \u0644\u0645\u0633\u0627\u0639\u062F\u062A\u0643 \u2728";
-    const aiMessage = {
-      id: `ai-${Date.now()}`,
-      content: replyText,
-      sender: { username: "\u0623\u0646\u064A\u0633 (\u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A) \u{1F916}", avatar: "\u{1F338}", color: "from-teal-400 to-emerald-400" },
-      roomId: replyToRoomId || null,
-      directChatId: replyToDirectId || null,
-      timestamp: (/* @__PURE__ */ new Date()).toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" }),
-      createdAt: Date.now()
-    };
-    dbMessages.push(aiMessage);
-    persistMessages();
-  } catch (err) {
-    console.error("Error invoking Gemini Bot helper:", err);
-  }
-}
 async function startServer() {
   const app = (0, import_express.default)();
   const PORT = 3e3;
@@ -157,6 +102,22 @@ async function startServer() {
   app.get("/api/sync", (req, res) => {
     const { since = 0, roomId, directChatId, username } = req.query;
     const sinceTime = parseInt(since, 10) || 0;
+    const cleanUser = (username || "").trim().toLowerCase();
+    if (cleanUser) {
+      dbMessages.forEach((m) => {
+        const isTargetRoom = roomId && m.roomId === roomId;
+        const isTargetDM = directChatId && m.directChatId === directChatId;
+        const notMe = m.sender?.username?.trim().toLowerCase() !== cleanUser;
+        if ((isTargetRoom || isTargetDM) && notMe) {
+          if (!m.readBy) {
+            m.readBy = [];
+          }
+          if (!m.readBy.includes(cleanUser)) {
+            m.readBy.push(cleanUser);
+          }
+        }
+      });
+    }
     let filtered = dbMessages.filter((m) => m.createdAt > sinceTime);
     if (roomId) {
       filtered = filtered.filter((m) => m.roomId === roomId);
@@ -165,7 +126,6 @@ async function startServer() {
     } else {
       filtered = filtered.filter((m) => m.roomId === "general");
     }
-    const cleanUser = (username || "").trim().toLowerCase();
     const globalRecent = dbMessages.filter((m) => {
       if (m.roomId) return true;
       if (m.directChatId && cleanUser) {
@@ -183,7 +143,7 @@ async function startServer() {
     });
   });
   app.post("/api/users/heartbeat", (req, res) => {
-    const { username, avatar, color } = req.body;
+    const { username, avatar, color, isTypingIn } = req.body;
     if (!username) {
       return res.status(400).json({ error: "Username is required" });
     }
@@ -192,7 +152,8 @@ async function startServer() {
       username: username.trim(),
       avatar: avatar || "\u{1F464}",
       color: color || "from-slate-400 to-slate-500",
-      lastSeen: Date.now()
+      lastSeen: Date.now(),
+      isTypingIn: isTypingIn || null
     };
     res.json({ success: true, count: Object.keys(activeUsers).length });
   });
@@ -245,15 +206,11 @@ async function startServer() {
         replyToSender: replyToSender || null,
         replyToContent: replyToContent || null,
         timestamp: (/* @__PURE__ */ new Date()).toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" }),
-        createdAt: Date.now()
+        createdAt: Date.now(),
+        readBy: []
       };
       dbMessages.push(newMessage);
       persistMessages();
-      const mentionsAI = content.includes("@\u0623\u0646\u064A\u0633") || content.includes("@anis");
-      const isPrivateAI = directChatId && (directChatId.toLowerCase().includes("\u0623\u0646\u064A\u0633") || directChatId.toLowerCase().includes("anis"));
-      if (mentionsAI || isPrivateAI) {
-        triggerAIBotResponse(content, roomId, directChatId, sender.username);
-      }
       return res.json({ success: true, message: newMessage });
     } catch (err) {
       console.error("Failed to post message", err);
